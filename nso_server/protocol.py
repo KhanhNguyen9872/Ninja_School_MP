@@ -28,7 +28,8 @@ EVENT_TYPES = ("welcome", "hello_ok", "room_joined", "error", "pong",
                "room_password_changed", "world_packet", "party_kill",
                "mob_reward", "mob_hit", "clan_item_delivery")
 EVENT_TYPES += ("activity_reward", "activity_state", "activity_closed",
-                "clan_name_assigned", "party_buff", "player_revived")
+                "clan_name_assigned", "party_buff", "player_revived",
+                "chan_le_bet", "chan_le_result")
 EVENT_OPCODES = {name: 64 + index for index, name in enumerate(EVENT_TYPES)}
 WIRE_KEYS = ("cmd", "player_id", "protocol", "name", "room", "password",
              "map", "x", "y", "hp", "max_hp", "mob_id", "damage",
@@ -54,7 +55,7 @@ WIRE_KEYS = ("cmd", "player_id", "protocol", "name", "room", "password",
              "quantity", "locked", "upgrade", "expire", "expires_at", "picker_id",
              "shinwa", "seller_id", "seller_name", "buyer_id", "buyer_name", "category",
              "amount", "attacker", "resume_token", "delivery_id", "party_exp",
-             "activity", "phase", "score")
+              "activity", "phase", "score", "zone", "protected_until", "item_type")
 KEY_TO_ID = {key: index + 1 for index, key in enumerate(WIRE_KEYS)}
 ID_TO_KEY = {value: key for key, value in KEY_TO_ID.items()}
 

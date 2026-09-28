@@ -67,7 +67,8 @@ class CombatMixin:
         return max(1, attack - reduction - resistance)
 
     async def validate_pvp_attack(self, player: Player, target: Player) -> int:
-        if player.map_id != target.map_id:
+        if (player.map_id != target.map_id
+                or player.zone_id != target.zone_id):
             await send_json(player.writer, {"type": "error", "code": "interaction_wrong_map"})
             return 0
         if abs(player.x - target.x) > 600 or abs(player.y - target.y) > 400:

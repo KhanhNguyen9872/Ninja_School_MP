@@ -105,7 +105,8 @@ class TradeInteractionMixin:
                                       "attacker_actor_id": player.actor_id,
                                       "target_id": target.player_id,
                                       "target_actor_id": target.actor_id,
-                                      "skill": skill, "damage": damage, "hp": target.hp})
+                                      "skill": skill, "damage": damage,
+                                      "hp": target.hp}, player.zone_id)
             if target.hp == 0:
                 await self.send_pair(player, target,
                                      {"type": "duel_end", "seq": room.sequence,

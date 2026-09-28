@@ -15,6 +15,7 @@ class Player:
     actor_id: int = 0
     room_id: str | None = None
     map_id: int = 1
+    zone_id: int = 0
     x: int = 0
     y: int = 0
     hp: int = 0
@@ -25,7 +26,7 @@ class Player:
     resume_token_hash: str = ""
     last_pvp_at: float = 0.0
     last_seen: float = field(default_factory=time.monotonic)
-    last_state: tuple[int, int, int, int] | None = None
+    last_state: tuple[int, int, int, int, int] | None = None
     last_revive_at: float = 0.0
 
 @dataclass
@@ -52,12 +53,14 @@ class Room:
     shinwa: dict[int, dict[str, Any]] = field(default_factory=dict)
     next_shinwa_id: int = 1000000
     lucky_bets: dict[int, dict[str, int]] = field(default_factory=lambda: {0: {}, 1: {}})
+    chan_le_bets: dict[str, dict[str, int]] = field(default_factory=dict)
     rankings: dict[str, dict[str, int]] = field(default_factory=dict)
     pending_deliveries: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
     clans: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def ensure_world(self) -> None:
         if not self.mobs:
-            self.mobs["1:mob-1"] = {"mob_id": "mob-1", "template": 1, "map": 1,
+            self.mobs["1:0:mob-1"] = {"mob_id": "mob-1", "template": 1, "map": 1,
+                                   "zone": 0,
                                    "x": 120, "y": 120, "hp": 100, "max_hp": 100,
                                    "alive": True}

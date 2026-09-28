@@ -138,11 +138,18 @@ class CoreMixin:
                     await self.disconnect(candidate)
 
     async def broadcast_map(self, room: Room, map_id: int,
-                            payload: dict[str, Any]) -> None:
-        """Encode once and project a reliable action only to visible peers."""
+                            payload: dict[str, Any], zone_id: int | None = None) -> None:
+        """Encode once and project a reliable action only to visible peers.
+
+        NSO visibility is map-and-zone scoped.  Callers may pass an explicit
+        zone, otherwise an event's ``zone`` field is used when present.
+        """
+        if zone_id is None and "zone" in payload:
+            zone_id = int(payload.get("zone", 0))
         frame = encode_frame(payload); recipients: list[Player] = []
         for candidate in tuple(room.players.values()):
-            if candidate.map_id != map_id:
+            if candidate.map_id != map_id or (zone_id is not None
+                                               and candidate.zone_id != zone_id):
                 continue
             try:
                 candidate.writer.write(frame); recipients.append(candidate)

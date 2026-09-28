@@ -40,7 +40,7 @@ class CombatInteractionMixin:
                                       "target_id": target.player_id,
                                       "target_actor_id": target.actor_id,
                                       "skill": skill, "damage": damage,
-                                      "hp": target.hp})
+                                      "hp": target.hp}, player.zone_id)
             if target.hp == 0:
                 room.cuu_sat.pop(player.player_id, None)
                 room.cuu_sat.pop(target.player_id, None)
@@ -74,6 +74,7 @@ class CombatInteractionMixin:
             for member_id in tuple(members):
                 recipient = room.players.get(member_id)
                 if recipient is None or recipient.map_id != player.map_id \
+                        or recipient.zone_id != player.zone_id \
                         or recipient.hp <= 0:
                     continue
                 delta_x = recipient.x - player.x; delta_y = recipient.y - player.y
@@ -88,7 +89,7 @@ class CombatInteractionMixin:
                                           "target_actor_id": recipient.actor_id,
                                           "skill": skill, "template": effect,
                                           "amount": duration, "damage": param,
-                                          "quantity": param2})
+                                          "quantity": param2}, player.zone_id)
         elif kind == "player_revive":
             # NSO_FINAL Char.hoiSinh: an alive class-6 character may cast
             # template 49 on one exhausted same-map character. Lôi đài and
@@ -138,5 +139,5 @@ class CombatInteractionMixin:
                                       "mp": max(1, int(target.appearance.get("max_mp", 1))),
                                       "x": target.x, "y": target.y,
                                       "template": 11, "amount": 5000,
-                                      "damage": evasion})
+                                      "damage": evasion}, player.zone_id)
         return True

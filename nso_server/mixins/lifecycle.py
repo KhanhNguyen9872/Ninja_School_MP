@@ -166,6 +166,7 @@ class LifecycleMixin:
             await send_json(player.writer, self.clan_payload(room, clan))
         await self.broadcast(room, {"type": "player_join", "player_id": player.player_id,
                                      "actor_id": player.actor_id, "name": player.name,
+                                     "map": player.map_id, "zone": player.zone_id,
                                      "appearance": dict(player.appearance)}, player.player_id)
         self.save_state()
         self.log("room_joined", room=room.room_id, player_id=player.player_id,
@@ -210,6 +211,7 @@ class LifecycleMixin:
         player.appearance = dict(appearance) if isinstance(appearance, dict) else {}
         player.clan_name = clean_text(player.appearance.get("clan_name"), MAX_NAME)
         player.map_id = int(saved.get("map", 1))
+        player.zone_id = max(0, int(saved.get("zone", 0)))
         player.x = int(saved.get("x", 0))
         player.y = int(saved.get("y", 0))
         player.hp = int(saved.get("hp", 0))

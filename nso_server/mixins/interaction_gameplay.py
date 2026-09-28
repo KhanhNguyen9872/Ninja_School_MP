@@ -17,7 +17,8 @@ class GameplayInteractionMixin:
             if player.player_id != room.owner_id:
                 await send_json(player.writer, {"type": "error", "code": "owner_world_only"})
                 return False
-            if target is None or target.map_id != player.map_id or target.hp <= 0:
+            if target is None or target.map_id != player.map_id \
+                    or target.zone_id != player.zone_id or target.hp <= 0:
                 await send_json(player.writer, {"type": "error", "code": "mob_target_invalid"})
                 return False
             parts = clean_text(message.get("data"), 96).split(",")
@@ -70,9 +71,11 @@ class GameplayInteractionMixin:
                     or any(ch not in "0123456789abcdef" for ch in payload):
                 await send_json(player.writer, {"type": "error", "code": "world_packet_invalid"})
                 return False
-            await self.broadcast(room, dict(base, type="world_packet",
-                                             command=command, data=payload),
-                                 player.player_id)
+            event = dict(base, type="world_packet", command=command, data=payload)
+            if target is not None:
+                await send_json(target.writer, event)
+            else:
+                await self.broadcast(room, event, player.player_id)
         elif kind == "activity_reward":
             if player.player_id != room.owner_id:
                 await send_json(player.writer, {"type": "error", "code": "owner_world_only"})
@@ -84,7 +87,8 @@ class GameplayInteractionMixin:
             activity = clean_text(payload.split("|", 1)[0], 32)
             recipients = [member for member in room.players.values()
                           if member.player_id != room.owner_id
-                          and member.map_id == player.map_id]
+                          and member.map_id == player.map_id
+                          and member.zone_id == player.zone_id]
             for member in recipients:
                 await self.durable_delivery(room, member.player_id,
                     {"type": "activity_reward", "seq": room.sequence,
@@ -248,6 +252,43 @@ class GameplayInteractionMixin:
                                          "category": category, "target_id": winner_id,
                                          "name": clean_text(winner_name, MAX_NAME),
                                          "amount": amount, "data": str(winner_bet)})
+            room.sequence += 1
+            await self.broadcast(room, {"type": "chat", "seq": room.sequence,
+                                         "channel": "world", "player_id": player.player_id,
+                                         "actor_id": player.actor_id, "name": "Admin",
+                                         "map": player.map_id, "zone": player.zone_id,
+                                         "text": "Chúc mừng " + clean_text(winner_name, MAX_NAME).upper()
+                                                 + " đã chiến thắng " + f"{amount:,}"
+                                                 + " xu trong trò chơi Vòng xoay may mắn với "
+                                                 + f"{winner_bet:,}" + " xu"})
+        elif kind == "chan_le_bet":
+            try:
+                amount, side = [int(value) for value in str(message.get("data", "")).split(",", 1)]
+            except (ValueError, TypeError):
+                amount, side = 0, -1
+            if amount < 1000000 or amount > 50000000 or side not in (0, 1):
+                await send_json(player.writer, {"type": "error", "code": "chan_le_invalid_bet"})
+                return False
+            room.chan_le_bets[player.player_id] = {"amount": amount, "side": side}
+            await self.broadcast(room, {"type": "chan_le_bet", "seq": room.sequence,
+                                         "player_id": player.player_id, "name": player.name,
+                                         "amount": amount, "relation_type": side})
+        elif kind == "chan_le_result":
+            if player.player_id != room.owner_id:
+                await send_json(player.writer, {"type": "error", "code": "owner_world_only"})
+                return False
+            try:
+                owner_round, side, first, second, result = [
+                    int(value) for value in str(message.get("data", "")).split(",", 4)]
+            except (ValueError, TypeError):
+                owner_round, side, first, second, result = -1, -1, 0, 0, 0
+            if owner_round < 0 or side not in (0, 1) or first < 0 or second < 0 or result < 0:
+                await send_json(player.writer, {"type": "error", "code": "chan_le_invalid_result"})
+                return False
+            room.chan_le_bets = {}
+            await self.broadcast(room, {"type": "chan_le_result", "seq": room.sequence,
+                                         "category": owner_round, "relation_type": side,
+                                         "amount": first, "quantity": second, "score": result})
         elif kind == "dungeon_finish":
             if player.player_id != room.owner_id:
                 await send_json(player.writer, {"type": "error", "code": "owner_world_only"})

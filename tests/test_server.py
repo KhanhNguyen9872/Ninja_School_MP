@@ -111,7 +111,12 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(owner["appearance"]["pet_template"], 241)
         await send(a_writer, '{"cmd":"chat","text":"hello"}')
         await a_writer.drain()
-        self.assertEqual((await receive(b_reader))["text"], "hello")
+        own_world = await receive(a_reader)
+        peer_world = await receive(b_reader)
+        self.assertEqual((own_world["type"], own_world["channel"], own_world["name"],
+                          own_world["text"]), ("chat", "world", "NinjaA", "hello"))
+        self.assertEqual((peer_world["channel"], peer_world["actor_id"],
+                          peer_world["text"]), ("world", projected["actor_id"], "hello"))
         await send(a_writer, '{"cmd":"map","map":3,"x":40,"y":50}')
         await a_writer.drain()
         transition = await receive(b_reader)
@@ -124,8 +129,23 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
         room = self.state.rooms["TEST"]
         self.assertEqual(room.players[a_id].map_id, 3)
         self.assertEqual(room.players[b_id].map_id, 9)
+        await send(a_writer, {"cmd": "chat", "channel": "map",
+                              "text": "hello map 3"})
+        own_map_chat = await receive(a_reader)
+        self.assertEqual((own_map_chat["type"], own_map_chat["channel"],
+                          own_map_chat["map"], own_map_chat["text"]),
+                         ("chat", "map", 3, "hello map 3"))
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(receive(b_reader), 0.05)
         await send(b_writer, {"cmd": "map", "map": 3, "x": 42, "y": 50})
         self.assertEqual((await receive(a_reader))["map"], 3)
+        await send(b_writer, {"cmd": "chat", "channel": "map",
+                              "text": "now together"})
+        a_map_chat = await receive(a_reader)
+        b_map_chat = await receive(b_reader)
+        self.assertEqual((a_map_chat["channel"], a_map_chat["name"],
+                          a_map_chat["text"]), ("map", "NinjaB", "now together"))
+        self.assertEqual((b_map_chat["channel"], b_map_chat["map"]), ("map", 3))
         await send(b_writer, {"cmd": "state", "map": 3, "x": 42, "y": 50, "hp": 100})
         await b_writer.drain()
         self.assertEqual((await receive(a_reader))["type"], "player_state")
@@ -144,6 +164,11 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
                           drop_event["drop"]["data"]), (2, 4, "6,10;7,20"))
         await send(b_writer, {"cmd": "pickup", "drop_id": drop_event["drop"]["drop_id"]})
         await b_writer.drain()
+        protected = await receive(b_reader)
+        self.assertEqual((protected["type"], protected["code"]),
+                         ("error", "drop_owned"))
+        self.state.rooms["TEST"].drops[drop_event["drop"]["drop_id"]]["protected_until"] = 0
+        await send(b_writer, {"cmd": "pickup", "drop_id": drop_event["drop"]["drop_id"]})
         claimed = await receive(b_reader)
         self.assertEqual((claimed["type"], claimed["player_id"]),
                          ("drop_taken", b_id))
@@ -745,6 +770,36 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((owner_result["type"], guest_result["target_id"],
                           guest_result["amount"]), ("vxmm_result", guest_id, 500000))
         self.assertEqual(self.state.rooms["VXMM"].lucky_bets[0], {})
+        owner_notice = await receive(owner_reader); guest_notice = await receive(guest_reader)
+        self.assertEqual((owner_notice["type"], owner_notice["channel"], owner_notice["name"]),
+                         ("chat", "world", "Admin"))
+        self.assertEqual(owner_notice["text"], guest_notice["text"])
+        self.assertIn("LUCKYGUEST", guest_notice["text"])
+        owner_writer.close(); guest_writer.close()
+        await owner_writer.wait_closed(); await guest_writer.wait_closed()
+
+    async def test_owner_authoritative_chan_le_round(self):
+        owner_reader, owner_writer, owner_id = await self.connect("ChanLeOwner")
+        guest_reader, guest_writer, guest_id = await self.connect("ChanLeGuest")
+        await send(owner_writer, {"cmd": "create", "room": "CHANLE"})
+        await receive(owner_reader)
+        await send(guest_writer, {"cmd": "join", "room": "CHANLE"})
+        await receive(guest_reader); await receive(owner_reader)
+        await send(guest_writer, {"cmd": "interaction", "kind": "chan_le_bet",
+                                  "target_actor": 0, "data": "2000000,1"})
+        owner_bet = await receive(owner_reader); guest_bet = await receive(guest_reader)
+        self.assertEqual((owner_bet["type"], guest_bet["amount"], guest_bet["relation_type"]),
+                         ("chan_le_bet", 2000000, 1))
+        self.assertEqual(self.state.rooms["CHANLE"].chan_le_bets[guest_id]["amount"], 2000000)
+        await send(guest_writer, {"cmd": "interaction", "kind": "chan_le_result",
+                                  "target_actor": 0, "data": "3,1,123,456,21"})
+        self.assertEqual((await receive(guest_reader))["code"], "owner_world_only")
+        await send(owner_writer, {"cmd": "interaction", "kind": "chan_le_result",
+                                  "target_actor": 0, "data": "3,1,123,456,21"})
+        owner_result = await receive(owner_reader); guest_result = await receive(guest_reader)
+        self.assertEqual((owner_result["type"], guest_result["relation_type"],
+                          guest_result["score"]), ("chan_le_result", 1, 21))
+        self.assertEqual(self.state.rooms["CHANLE"].chan_le_bets, {})
         owner_writer.close(); guest_writer.close()
         await owner_writer.wait_closed(); await guest_writer.wait_closed()
 
@@ -1203,18 +1258,18 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
         player.map_id = 2
         await self.state.command(player, {"cmd": "attack", "mob_id": "7",
                                           "damage": 20, "hp": 80, "max_hp": 100})
-        self.assertEqual(room.mobs["2:7"]["hp"], 80)
+        self.assertEqual(room.mobs["2:0:7"]["hp"], 80)
         player.map_id = 3
         await self.state.command(player, {"cmd": "attack", "mob_id": "7",
                                           "damage": 50, "hp": 50, "max_hp": 100})
-        self.assertEqual(room.mobs["2:7"]["hp"], 80)
-        self.assertEqual(room.mobs["3:7"]["hp"], 50)
+        self.assertEqual(room.mobs["2:0:7"]["hp"], 80)
+        self.assertEqual(room.mobs["3:0:7"]["hp"], 50)
         # Legacy clients may omit authoritative HP; death must use the
         # computed server HP rather than the default reported value.
         await self.state.command(player, {"cmd": "attack", "mob_id": "7",
                                           "damage": 50, "max_hp": 100})
-        self.assertEqual(room.mobs["3:7"]["hp"], 0)
-        self.assertFalse(room.mobs["3:7"]["alive"])
+        self.assertEqual(room.mobs["3:0:7"]["hp"], 0)
+        self.assertFalse(room.mobs["3:0:7"]["alive"])
         writer.close(); await writer.wait_closed()
 
     async def test_resume_rehydrates_saved_player(self):
@@ -1480,6 +1535,74 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
                          self.state.rooms["ACTIVITY"].pending_deliveries)
         guest_writer.close(); owner_writer.close()
         await guest_writer.wait_closed(); await owner_writer.wait_closed()
+
+    async def test_zone_population_visibility_and_source_drop_ownership(self):
+        owner_reader, owner_writer, owner_id = await self.connect("ZoneOwner")
+        guest_reader, guest_writer, guest_id = await self.connect("ZoneGuest")
+        await send(owner_writer, {"cmd": "create", "room": "ZONES"})
+        await receive(owner_reader)
+        await send(guest_writer, {"cmd": "join", "room": "ZONES"})
+        await receive(guest_reader); await receive(owner_reader)
+
+        await send(owner_writer, {"cmd": "state", "map": 22, "zone": 26,
+                                  "x": 100, "y": 200, "hp": 100})
+        owner_state = await receive(guest_reader)
+        self.assertEqual((owner_state["map"], owner_state["zone"]), (22, 26))
+        await send(guest_writer, {"cmd": "state", "map": 22, "zone": 27,
+                                  "x": 120, "y": 200, "hp": 100})
+        guest_state = await receive(owner_reader)
+        self.assertEqual((guest_state["map"], guest_state["zone"]), (22, 27))
+        room = self.state.rooms["ZONES"]
+        self.assertEqual((room.players[owner_id].zone_id,
+                          room.players[guest_id].zone_id), (26, 27))
+
+        await send(guest_writer, {"cmd": "chat", "channel": "map",
+                                  "text": "zone 27 only"})
+        self.assertEqual((await receive(guest_reader))["text"], "zone 27 only")
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(receive(owner_reader), 0.05)
+
+        await send(guest_writer, {"cmd": "map", "map": 22, "zone": 26,
+                                  "x": 120, "y": 200})
+        transition = await receive(owner_reader)
+        self.assertEqual((transition["map"], transition["zone"]), (22, 26))
+        await send(guest_writer, {"cmd": "chat", "channel": "map",
+                                  "text": "same zone"})
+        self.assertEqual((await receive(owner_reader))["text"], "same zone")
+        self.assertEqual((await receive(guest_reader))["text"], "same zone")
+
+        await send(owner_writer, {"cmd": "drop", "item_id": 77,
+                                  "template": 42, "item_type": 4,
+                                  "map": 22, "zone": 26,
+                                  "x": 100, "y": 200})
+        owner_drop = await receive(owner_reader)
+        guest_drop = await receive(guest_reader)
+        drop_id = guest_drop["drop"]["drop_id"]
+        self.assertEqual((owner_drop["drop"]["zone"],
+                          guest_drop["drop"]["owner"]), (26, owner_id))
+        await send(guest_writer, {"cmd": "pickup", "drop_id": drop_id})
+        denied = await receive(guest_reader)
+        self.assertEqual((denied["type"], denied["code"]),
+                         ("error", "drop_owned"))
+        room.drops[drop_id]["protected_until"] = 0
+        await send(guest_writer, {"cmd": "pickup", "drop_id": drop_id})
+        self.assertEqual((await receive(owner_reader))["type"], "drop_taken")
+        self.assertEqual((await receive(guest_reader))["type"], "drop_taken")
+
+        await send(owner_writer, {"cmd": "drop", "item_id": 78,
+                                  "template": 900, "item_type": 25,
+                                  "map": 22, "zone": 26,
+                                  "x": 100, "y": 200})
+        await receive(owner_reader)
+        task_drop = await receive(guest_reader)
+        task_id = task_drop["drop"]["drop_id"]
+        room.drops[task_id]["protected_until"] = 0
+        await send(guest_writer, {"cmd": "pickup", "drop_id": task_id})
+        task_denied = await receive(guest_reader)
+        self.assertEqual((task_denied["type"], task_denied["code"]),
+                         ("error", "drop_owned"))
+        owner_writer.close(); guest_writer.close()
+        await owner_writer.wait_closed(); await guest_writer.wait_closed()
 
 
 if __name__ == "__main__":

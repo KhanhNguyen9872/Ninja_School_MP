@@ -69,6 +69,7 @@ class PersistenceMixin:
                                "cuu_sat": room.cuu_sat,
                                "reserved_names": room.reserved_names,
                                "lucky_bets": room.lucky_bets,
+                               "chan_le_bets": room.chan_le_bets,
                                "rankings": room.rankings,
                                "clans": room.clans,
                                "pending_deliveries": room.pending_deliveries}
@@ -128,6 +129,7 @@ class PersistenceMixin:
     @staticmethod
     def player_snapshot(player: Player) -> dict[str, Any]:
         return {"player_id": player.player_id, "name": player.name, "map": player.map_id,
+                "zone": player.zone_id,
                 "x": player.x, "y": player.y, "hp": player.hp,
                 "actor_id": getattr(player, "actor_id",
                                     PersistenceMixin.actor_id_for(player.player_id)),
@@ -225,6 +227,7 @@ class PersistenceMixin:
         cleaned = self.clean_appearance(appearance if isinstance(appearance, dict) else {})
         return {"active": active,
                 "map": int(message.get("map", player.map_id)),
+                "zone": max(0, int(message.get("zone", player.zone_id))),
                 "x": int(message.get("x", player.x)),
                 "y": int(message.get("y", player.y)),
                 "hp": max(0, int(message.get("hp", 0))),

@@ -22,7 +22,8 @@ class InteractionsMixin:
                         "clan_store_buy", "clan_item_use", "clan_pet_sync",
                         "clan_war_accept", "clan_war_points",
                         "cuu_sat_clear", "shinwa_publish", "shinwa_buy",
-                        "shinwa_remove", "vxmm_bet", "vxmm_result", "rank_report",
+                        "shinwa_remove", "vxmm_bet", "vxmm_result", "chan_le_bet",
+                        "chan_le_result", "rank_report",
                         "dungeon_finish", "delivery_ack", "room_password",
                         "world_packet", "activity_reward", "party_buff") and target is None:
             await send_json(player.writer, {"type": "error", "code": "player_not_found"})
@@ -33,15 +34,16 @@ class InteractionsMixin:
         if target is not None and kind in ("trade_invite", "trade_accept",
                                            "duel_invite", "duel_accept", "duel_attack",
                                            "pvp_attack", "cuu_sat", "player_revive") \
-                and target.map_id != player.map_id:
+                and (target.map_id != player.map_id
+                     or target.zone_id != player.zone_id):
             await send_json(player.writer, {"type": "error", "code": "interaction_wrong_map"})
             return
         room.sequence += 1
         base = {"seq": room.sequence, "player_id": player.player_id,
                 "actor_id": player.actor_id, "name": player.name,
-                "map": player.map_id}
+                "map": player.map_id, "zone": player.zone_id}
         handled = False
-        if kind in ('mob_attack', 'mob_yen', 'world_packet', 'activity_reward', 'room_password', 'room_kick', 'delivery_ack', 'friend_invite', 'shinwa_publish', 'shinwa_buy', 'shinwa_remove', 'vxmm_bet', 'vxmm_result', 'dungeon_finish', 'rank_report', 'friend_remove'):
+        if kind in ('mob_attack', 'mob_yen', 'world_packet', 'activity_reward', 'room_password', 'room_kick', 'delivery_ack', 'friend_invite', 'shinwa_publish', 'shinwa_buy', 'shinwa_remove', 'vxmm_bet', 'vxmm_result', 'chan_le_bet', 'chan_le_result', 'dungeon_finish', 'rank_report', 'friend_remove'):
             handled = await self.handle_gameplay_interaction(
                 room, player, target, message, base, kind)
         elif kind in ('clan_invite', 'clan_accept', 'clan_chat', 'clan_state_request', 'clan_alert', 'clan_role', 'clan_kick', 'clan_leave', 'clan_contribute', 'clan_points', 'clan_upgrade', 'clan_item_upgrade', 'clan_store_buy', 'clan_item_send', 'clan_item_use', 'clan_pet', 'clan_pet_sync', 'clan_territory_open', 'clan_war_invite', 'clan_war_accept', 'clan_war_points'):

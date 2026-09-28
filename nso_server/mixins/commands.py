@@ -125,6 +125,7 @@ class CommandsMixin:
             await self.broadcast(room, {"type": "world_sync", "seq": room.sequence,
                                          "owner_id": room.owner_id,
                                          "map": player.map_id,
+                                         "zone": player.zone_id,
                                          "world_epoch": int(message.get("world_epoch", 0)),
                                          "payload": clean_text(message.get("payload"), 65535)},
                                  player.player_id)
@@ -184,27 +185,30 @@ class CommandsMixin:
             return
         if command == "map":
             next_map = int(message.get("map", player.map_id))
-            if next_map != player.map_id:
+            next_zone = max(0, int(message.get("zone", player.zone_id)))
+            if next_map != player.map_id or next_zone != player.zone_id:
                 await self.clear_cuu_sat_for_player(room, player,
                                                     "map_transition", True)
             player.map_id = next_map
+            player.zone_id = next_zone
             player.x = int(message.get("x", player.x))
             player.y = int(message.get("y", player.y))
             room.sequence += 1
             await self.broadcast(room, {"type": "map_transition", "seq": room.sequence,
                                          "player_id": player.player_id, "actor_id": player.actor_id,
-                                         "map": player.map_id,
+                                         "map": player.map_id, "zone": player.zone_id,
                                          "x": player.x, "y": player.y}, player.player_id)
             self.save_state()
             self.log("map_transition", room=room.room_id, player_id=player.player_id,
-                     map=player.map_id, x=player.x, y=player.y, sequence=room.sequence)
+                     map=player.map_id, zone=player.zone_id,
+                     x=player.x, y=player.y, sequence=room.sequence)
             return
         if command == "attack":
             mob_id = clean_text(message.get("mob_id"), 32)
             if not mob_id:
                 await send_json(player.writer, {"type": "error", "code": "mob_id_required"})
                 return
-            mob_key = f"{player.map_id}:{mob_id}"
+            mob_key = f"{player.map_id}:{player.zone_id}:{mob_id}"
             mob = room.mobs.get(mob_key)
             reported_max = max(1, min(int(message.get("max_hp", 100)), 2000000000))
             reported_hp = max(0, min(int(message.get("hp", reported_max)), reported_max))
@@ -217,6 +221,7 @@ class CommandsMixin:
                     and (mob is None or not mob.get("alive", False)):
                 if mob is None:
                     mob = {"mob_id": mob_id, "map": player.map_id,
+                           "zone": player.zone_id,
                            "x": player.x, "y": player.y}
                     room.mobs[mob_key] = mob
                 mob["template"] = max(0, min(
@@ -233,12 +238,14 @@ class CommandsMixin:
                 self.save_state()
                 self.log_hot_path("mob_respawn", room=room.room_id,
                                   player_id=player.player_id, map=player.map_id,
+                                  zone=player.zone_id,
                                   mob_id=mob_id, hp=reported_hp,
                                   sequence=room.sequence)
                 return
             if mob is None:
                 mob = {"mob_id": mob_id, "template": int(message.get("drop_template", 1)),
-                       "map": player.map_id, "x": player.x, "y": player.y,
+                       "map": player.map_id, "zone": player.zone_id,
+                       "x": player.x, "y": player.y,
                        "hp": reported_max, "max_hp": reported_max,
                        "alive": reported_max > 0}
                 room.mobs[mob_key] = mob
@@ -268,6 +275,7 @@ class CommandsMixin:
                 for member_id in members:
                     member = room.players.get(member_id)
                     if member is None or member is player or member.map_id != player.map_id \
+                            or member.zone_id != player.zone_id \
                             or member.hp <= 0:
                         continue
                     await send_json(member.writer, {"type": "party_kill",
@@ -280,6 +288,7 @@ class CommandsMixin:
                 for member_id in members:
                     member = room.players.get(member_id)
                     if member is None or member is player or member.map_id != player.map_id \
+                            or member.zone_id != player.zone_id \
                             or member.hp <= 0:
                         continue
                     member_level = int(member.appearance.get("level", 1))
@@ -302,20 +311,25 @@ class CommandsMixin:
             item_id = max(0, min(int(message.get("item_id", 0)), 65535))
             template = max(0, min(int(message.get("template", 0)), 65535))
             map_id = int(message.get("map", player.map_id))
-            if map_id != player.map_id:
+            zone_id = max(0, int(message.get("zone", player.zone_id)))
+            if map_id != player.map_id or zone_id != player.zone_id:
                 await send_json(player.writer, {"type": "error", "code": "drop_wrong_map"})
                 return
             drop_id = f"{player.player_id}-{item_id}"
+            now_ms = int(time.time() * 1000)
             drop = {"drop_id": drop_id, "template": template, "map": map_id,
+                    "zone": zone_id,
                     "x": int(message.get("x", player.x)),
                     "y": int(message.get("y", player.y)), "owner": player.player_id,
                     "quantity": max(1, min(int(message.get("quantity", 1)), 32767)),
+                    "item_type": max(-1, min(int(message.get("item_type", -1)), 255)),
                     "locked": bool(message.get("locked", False)),
                     "upgrade": max(0, min(int(message.get("upgrade", 0)), 255)),
                     "sys_up": max(0, min(int(message.get("sys_up", 0)), 255)),
                     "expire": int(message.get("expire", -1)),
                     "data": clean_text(message.get("data"), 1024),
-                    "expires_at": int(time.time() * 1000) + 30000}
+                    "protected_until": now_ms + 20000,
+                    "expires_at": now_ms + 30000}
             room.drops[drop_id] = drop
             room.sequence += 1
             await self.broadcast(room, {"type": "drop_spawn", "seq": room.sequence,
@@ -323,7 +337,7 @@ class CommandsMixin:
             self.save_state()
             self.log_hot_path("drop_spawn", room=room.room_id,
                               player_id=player.player_id, drop_id=drop_id,
-                              template=template, map=map_id,
+                              template=template, map=map_id, zone=zone_id,
                               sequence=room.sequence)
             return
         if command == "pickup":
@@ -340,8 +354,18 @@ class CommandsMixin:
                 await send_json(player.writer, {"type": "error", "code": "drop_expired"})
                 self.save_state()
                 return
-            if int(drop.get("map", -1)) != player.map_id:
+            if (int(drop.get("map", -1)) != player.map_id
+                    or int(drop.get("zone", 0)) != player.zone_id):
                 await send_json(player.writer, {"type": "error", "code": "drop_wrong_map"})
+                return
+            owner_id = clean_text(drop.get("owner"), 64)
+            protected = int(drop.get("protected_until", 0))
+            # NSO_FINAL ItemMap.isCanPickup unlocks ordinary foreign loot after
+            # 20 seconds. TYPE_TASK (25) remains owner-only even afterwards.
+            if owner_id and owner_id != player.player_id and (
+                    int(time.time() * 1000) < protected
+                    or int(drop.get("item_type", -1)) == 25):
+                await send_json(player.writer, {"type": "error", "code": "drop_owned"})
                 return
             if abs(int(drop.get("x", 0)) - player.x) >= 150 \
                     or abs(int(drop.get("y", 0)) - player.y) >= 150:
@@ -357,16 +381,18 @@ class CommandsMixin:
             return
         if command == "state":
             next_map = int(message.get("map", player.map_id))
-            if next_map != player.map_id:
+            next_zone = max(0, int(message.get("zone", player.zone_id)))
+            if next_map != player.map_id or next_zone != player.zone_id:
                 await self.clear_cuu_sat_for_player(room, player,
                                                     "map_transition", True)
             next_x = int(message.get("x", player.x))
             next_y = int(message.get("y", player.y))
             next_hp = int(message.get("hp", player.hp))
-            state = (next_map, next_x, next_y, next_hp)
+            state = (next_map, next_zone, next_x, next_y, next_hp)
             if player.last_state == state:
                 return
             player.map_id = next_map
+            player.zone_id = next_zone
             player.x = next_x
             player.y = next_y
             player.hp = next_hp
@@ -374,21 +400,38 @@ class CommandsMixin:
             room.sequence += 1
             await self.broadcast(room, {"type": "player_state", "seq": room.sequence, "player_id": player.player_id,
                                          "actor_id": player.actor_id,
-                                         "map": player.map_id, "x": player.x, "y": player.y, "hp": player.hp}, player.player_id)
+                                         "map": player.map_id, "zone": player.zone_id,
+                                         "x": player.x, "y": player.y, "hp": player.hp}, player.player_id)
             self.save_state()
             if self.trace_hot_path:
                 self.log("player_state", room=room.room_id, player_id=player.player_id,
-                         map=player.map_id, x=player.x, y=player.y, hp=player.hp,
+                         map=player.map_id, zone=player.zone_id,
+                         x=player.x, y=player.y, hp=player.hp,
                          sequence=room.sequence)
             return
         if command in ("event", "chat"):
             body = clean_text(message.get("text"), 512) if command == "chat" else message.get("payload", {})
             room.sequence += 1
-            await self.broadcast(room, {"type": command, "seq": room.sequence, "player_id": player.player_id,
-                                         "text": body} if command == "chat" else {"type": "event", "seq": room.sequence,
-                                         "player_id": player.player_id, "payload": body}, player.player_id)
+            if command == "chat":
+                channel = clean_text(message.get("channel"), 16).lower()
+                if channel not in ("world", "map"):
+                    channel = "world"
+                event = {"type": "chat", "seq": room.sequence,
+                         "channel": channel, "player_id": player.player_id,
+                         "actor_id": player.actor_id, "name": player.name,
+                         "map": player.map_id, "zone": player.zone_id, "text": body}
+                if channel == "map":
+                    await self.broadcast_map(room, player.map_id, event,
+                                             player.zone_id)
+                else:
+                    await self.broadcast(room, event)
+            else:
+                await self.broadcast(room, {"type": "event", "seq": room.sequence,
+                                             "player_id": player.player_id,
+                                             "payload": body}, player.player_id)
             self.save_state()
             self.log(command, room=room.room_id, player_id=player.player_id,
+                     channel=channel if command == "chat" else "",
                      text=body if command == "chat" else "<event>", sequence=room.sequence)
             return
         await send_json(player.writer, {"type": "error", "code": "unknown_command"})
