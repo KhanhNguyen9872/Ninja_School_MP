@@ -1,0 +1,16 @@
+[Unit]
+Description=NSO public room relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/nso-room
+ExecStart=/usr/bin/python3 /opt/nso-room/server.py --host 0.0.0.0 --port 8765 --state-file /var/lib/nso-room/rooms.json
+Restart=on-failure
+RestartSec=3
+User=nobody
+Group=nogroup
+
+[Install]
+WantedBy=multi-user.target

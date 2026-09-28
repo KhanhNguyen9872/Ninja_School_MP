@@ -1,0 +1,10 @@
+services:
+  nso-room:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8765:8765/tcp"
+    volumes:
+      - nso-room-data:/var/lib/nso-room
+volumes:
+  nso-room-data:
