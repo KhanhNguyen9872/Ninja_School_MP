@@ -21,7 +21,7 @@ class ArchitectureTest(unittest.TestCase):
 
     def test_domain_modules_are_present(self):
         expected = {
-            "config.py", "protocol.py", "models.py", "service.py", "cli.py",
+            "config.py", "protocol.py", "models.py", "service.py", "cli.py", "udp.py",
             "mixins/core.py", "mixins/persistence.py", "mixins/social.py",
             "mixins/combat.py", "mixins/lifecycle.py", "mixins/commands.py",
             "mixins/interactions.py",

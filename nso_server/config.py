@@ -7,6 +7,7 @@ import hashlib
 from typing import Any
 
 MAX_FRAME = 256 * 1024
+MAX_DATAGRAM = 65507
 MAX_NAME = 24
 MAX_ROOM = 32
 MAX_PASSWORD = 64
@@ -28,7 +29,7 @@ def password_digest(password: str) -> str:
         return ""
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
-def write_buffer_size(writer: asyncio.StreamWriter) -> int:
+def write_buffer_size(writer: Any) -> int:
     """Return queued TCP bytes without relying on private asyncio internals."""
     transport = getattr(writer, "transport", None)
     getter = getattr(transport, "get_write_buffer_size", None)

@@ -11,7 +11,7 @@ from typing import Any
 class Player:
     player_id: str
     name: str
-    writer: asyncio.StreamWriter
+    writer: Any
     actor_id: int = 0
     room_id: str | None = None
     map_id: int = 1

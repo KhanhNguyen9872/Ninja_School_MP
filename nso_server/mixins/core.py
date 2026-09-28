@@ -216,6 +216,8 @@ class CoreMixin:
                 message["cmd"] = command
                 player.last_seen = time.monotonic()
                 await self.command(player, message)
+                if getattr(writer, "is_closing", lambda: False)():
+                    break
         except (ConnectionError, asyncio.IncompleteReadError, OSError):
             pass
         finally:

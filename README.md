@@ -10,18 +10,22 @@ trên thiết bị bằng RMS.
 - Đồng bộ nhân vật, bản đồ, chiến đấu, quái và vật phẩm rơi.
 - Hỗ trợ chat, tổ đội, giao dịch, tỷ thí, gia tộc và hoạt động chung.
 - Lưu snapshot phòng để khôi phục sau khi server khởi động lại.
+- Hỗ trợ TCP và UDP trên cùng cổng; phía game mặc định dùng TCP.
 - Giao thức nhị phân v2, UTF-8, chạy bằng `asyncio` và không cần thư viện ngoài.
 
 ## Yêu cầu
 
 - Python 3.10 trở lên.
-- Mở cổng TCP `8765` nếu chạy trên VPS hoặc máy chủ công cộng.
+- Mở cổng TCP và UDP `8765` nếu chạy trên VPS hoặc máy chủ công cộng.
 
 ## Chạy server
 
 ```bash
 python server.py --host 0.0.0.0 --port 8765
 ```
+
+Mặc định server mở cả TCP và UDP. Có thể giới hạn bằng
+`--transport tcp`, `--transport udp` hoặc `--transport both`.
 
 Windows có thể chạy trực tiếp `run-server.cmd`.
 

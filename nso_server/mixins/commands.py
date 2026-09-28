@@ -45,6 +45,10 @@ class CommandsMixin:
                               clean_text(message.get("room"), MAX_ROOM).upper(),
                               clean_text(message.get("resume_token"), 128))
             return
+        if command == "disconnect":
+            await self.disconnect(player)
+            player.writer.close()
+            return
         if command == "leave":
             await self.disconnect_from_room(player)
             return

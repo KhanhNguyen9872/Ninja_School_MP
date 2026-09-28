@@ -10,7 +10,7 @@ REQUEST_OPCODES = {1: "hello", 2: "create", 3: "join", 4: "resume",
                    5: "snapshot", 6: "state", 7: "map", 8: "attack",
                    9: "pickup", 10: "drop", 11: "chat", 12: "private_chat",
                    13: "interaction", 14: "appearance", 15: "clone",
-                   16: "world_sync", 17: "ping"}
+                   16: "world_sync", 17: "ping", 18: "disconnect"}
 EVENT_TYPES = ("welcome", "hello_ok", "room_joined", "error", "pong",
                "player_join", "player_leave", "snapshot", "player_appearance",
                "player_state", "map_transition", "mob_state", "drop_spawn",
@@ -155,7 +155,7 @@ def encode_frame(payload: dict[str, Any]) -> bytes:
     body = _encode_value(payload)
     return b"NS" + bytes((2, opcode)) + struct.pack(">I", len(body)) + body
 
-async def send_json(writer: asyncio.StreamWriter, payload: dict[str, Any]) -> None:
+async def send_json(writer: Any, payload: dict[str, Any]) -> None:
     """Compatibility name; writes protocol-v2 binary frames, never JSON."""
     writer.write(encode_frame(payload))
     await writer.drain()

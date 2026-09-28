@@ -86,7 +86,7 @@ class SocialMixin:
         # waiting on any one slow J2ME socket. Sequential send_json/drain made
         # a stalled leader prevent older members from seeing the new joiner.
         frame = encode_frame(payload)
-        recipients: list[asyncio.StreamWriter] = []
+        recipients: list[Any] = []
         for member in members:
             participant = room.players.get(member)
             if participant is not None:
