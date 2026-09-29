@@ -1645,6 +1645,49 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
         task_denied = await receive(guest_reader)
         self.assertEqual((task_denied["type"], task_denied["code"]),
                          ("error", "drop_owned"))
+        room.drops.pop(task_id, None)
+
+        # The room owner executes shared-world loot, but the server protects
+        # the row for the player whose final hit killed the mob.
+        await send(owner_writer, {"cmd": "drop", "item_id": 79,
+                                  "template": 545, "item_type": 4,
+                                  "owner": guest_id,
+                                  "map": 22, "zone": 26,
+                                  "x": 100, "y": 200})
+        redirected_owner_drop = await receive(owner_reader)
+        redirected_guest_drop = await receive(guest_reader)
+        redirected_id = redirected_guest_drop["drop"]["drop_id"]
+        self.assertEqual(redirected_guest_drop["drop"]["owner"], guest_id)
+        await send(owner_writer, {"cmd": "pickup", "drop_id": redirected_id})
+        redirected_denied = await receive(owner_reader)
+        self.assertEqual((redirected_denied["type"], redirected_denied["code"]),
+                         ("error", "drop_owned"))
+        await send(guest_writer, {"cmd": "pickup", "drop_id": redirected_id})
+        self.assertEqual((await receive(owner_reader))["type"], "drop_taken")
+        self.assertEqual((await receive(guest_reader))["type"], "drop_taken")
+
+        # A non-owner cannot assign its loot to another identity.
+        await send(guest_writer, {"cmd": "drop", "item_id": 80,
+                                  "template": 42, "item_type": 4,
+                                  "owner": owner_id,
+                                  "map": 22, "zone": 26,
+                                  "x": 120, "y": 200})
+        forged_owner_view = await receive(owner_reader)
+        forged_guest_view = await receive(guest_reader)
+        self.assertEqual(forged_guest_view["drop"]["owner"], guest_id)
+
+        # NSO_FINAL removes ordinary ItemMap rows at 30 seconds without
+        # waiting for a later pickup, snapshot or another drop command.
+        expiring_id = forged_guest_view["drop"]["drop_id"]
+        deadline = int(time.time() * 1000) + 20
+        room.drops[expiring_id]["expires_at"] = deadline
+        await self.state._expire_room_drop(room, expiring_id, deadline)
+        expired_owner = await receive(owner_reader)
+        expired_guest = await receive(guest_reader)
+        for expired in (expired_owner, expired_guest):
+            self.assertEqual((expired["type"], expired["drop_id"], expired["player_id"]),
+                             ("drop_taken", expiring_id, ""))
+        self.assertNotIn(expiring_id, room.drops)
         owner_writer.close(); guest_writer.close()
         await owner_writer.wait_closed(); await guest_writer.wait_closed()
 
@@ -1670,8 +1713,8 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
             events = [await receive(owner_reader), await receive(guest_reader),
                       await receive(third_reader)]
             for event in events:
-                self.assertEqual((event["drop"]["owner"], event["drop"]["publisher"]),
-                                 (guest_id, owner_id))
+                self.assertEqual(event["drop"]["owner"], guest_id)
+                self.assertNotIn("publisher", event["drop"])
             return events[0]["drop"]["drop_id"]
 
         protected_id = await owner_drop(91)

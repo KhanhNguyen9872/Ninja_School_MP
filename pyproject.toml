@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nso-room-server"
-version = "1.26.41"
+version = "1.26.43"
 description = "Standalone asyncio room relay for Ninja School Offline"
 readme = "README.md"
 requires-python = ">=3.10"

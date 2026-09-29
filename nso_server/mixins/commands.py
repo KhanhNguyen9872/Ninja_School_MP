@@ -12,6 +12,30 @@ from ..models import Player, Room
 from ..protocol import send_json
 
 class CommandsMixin:
+    async def _expire_room_drop(self, room: Room, drop_id: str,
+                                deadline: int) -> None:
+        """Remove one ItemMap at NSO_FINAL's absolute 30-second deadline."""
+        # asyncio timers may resume a fraction before a wall-clock millisecond
+        # boundary. Recheck until the absolute deadline instead of losing the
+        # only expiry task for this row.
+        while True:
+            remaining = deadline - int(time.time() * 1000)
+            if remaining <= 0:
+                break
+            await asyncio.sleep(remaining / 1000.0)
+        if self.rooms.get(room.room_id) is not room:
+            return
+        drop = room.drops.get(drop_id)
+        if drop is None or int(drop.get("expires_at", 0)) != deadline:
+            return
+        room.drops.pop(drop_id, None)
+        room.sequence += 1
+        await self.broadcast(room, {"type": "drop_taken", "seq": room.sequence,
+                                    "drop_id": drop_id, "player_id": ""})
+        self.save_state()
+        self.log_hot_path("drop_expired", room=room.room_id, drop_id=drop_id,
+                          sequence=room.sequence)
+
     async def _respawn_room_mob(self, room: Room, mob_key: str,
                                 deadline: int) -> None:
         await asyncio.sleep(max(0.0, (deadline - int(time.time() * 1000)) / 1000.0))
@@ -349,6 +373,9 @@ class CommandsMixin:
                 return
             drop_id = f"{player.player_id}-{item_id}"
             now_ms = int(time.time() * 1000)
+            # The owner client is the shared-world executor.  When it
+            # materializes a remotely confirmed death, the fatal hitter is the
+            # NSO_FINAL ItemMap owner; a guest may never forge this override.
             drop_owner = player.player_id
             requested_owner = clean_text(message.get("owner"), 64)
             if requested_owner and player.player_id == room.owner_id:
@@ -360,7 +387,6 @@ class CommandsMixin:
                     "zone": zone_id,
                     "x": int(message.get("x", player.x)),
                     "y": int(message.get("y", player.y)), "owner": drop_owner,
-                    "publisher": player.player_id,
                     "quantity": max(1, min(int(message.get("quantity", 1)), 32767)),
                     "item_type": max(-1, min(int(message.get("item_type", -1)), 255)),
                     "locked": bool(message.get("locked", False)),
@@ -371,6 +397,8 @@ class CommandsMixin:
                     "protected_until": now_ms + 20000,
                     "expires_at": now_ms + 30000}
             room.drops[drop_id] = drop
+            asyncio.create_task(self._expire_room_drop(
+                room, drop_id, int(drop["expires_at"])))
             room.sequence += 1
             await self.broadcast(room, {"type": "drop_spawn", "seq": room.sequence,
                                          "drop": dict(drop)})

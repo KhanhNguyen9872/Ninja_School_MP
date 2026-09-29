@@ -56,7 +56,7 @@ WIRE_KEYS = ("cmd", "player_id", "protocol", "name", "room", "password",
              "shinwa", "seller_id", "seller_name", "buyer_id", "buyer_name", "category",
              "amount", "attacker", "resume_token", "delivery_id", "party_exp",
              "activity", "phase", "score", "zone", "respawn_seconds", "respawn_at",
-             "protected_until", "item_type", "publisher")
+             "protected_until", "item_type")
 KEY_TO_ID = {key: index + 1 for index, key in enumerate(WIRE_KEYS)}
 ID_TO_KEY = {value: key for key, value in KEY_TO_ID.items()}
 
