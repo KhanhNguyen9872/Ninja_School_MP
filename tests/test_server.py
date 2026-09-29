@@ -1272,6 +1272,50 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(room.mobs["3:0:7"]["alive"])
         writer.close(); await writer.wait_closed()
 
+    async def test_dead_mob_survives_map_return_until_room_respawn_deadline(self):
+        owner_reader, owner_writer, owner_id = await self.connect("Owner")
+        guest_reader, guest_writer, guest_id = await self.connect("Guest")
+        await send(owner_writer, {"cmd": "create", "room": "MOBSTATE"})
+        await receive(owner_reader)
+        await send(guest_writer, {"cmd": "join", "room": "MOBSTATE"})
+        await receive(guest_reader); await receive(owner_reader)
+        room = self.state.rooms["MOBSTATE"]
+        room.players[owner_id].map_id = 7; room.players[owner_id].zone_id = 0
+        room.players[guest_id].map_id = 7; room.players[guest_id].zone_id = 0
+
+        await send(guest_writer, {"cmd": "attack", "mob_id": "3",
+                                  "damage": 100, "hp": 0, "max_hp": 100,
+                                  "respawn_seconds": 2})
+        owner_death = await receive(owner_reader)
+        guest_death = await receive(guest_reader)
+        self.assertFalse(owner_death["mob"]["alive"])
+        self.assertFalse(guest_death["mob"]["alive"])
+        self.assertGreater(room.mobs["7:0:3"]["respawn_at"], int(time.time() * 1000))
+
+        await send(guest_writer, {"cmd": "map", "map": 8, "zone": 0,
+                                  "x": 10, "y": 20})
+        await receive(owner_reader)
+        await send(guest_writer, {"cmd": "map", "map": 7, "zone": 0,
+                                  "x": 10, "y": 20})
+        await receive(owner_reader)
+        await send(guest_writer, {"cmd": "snapshot"})
+        snapshot = await receive(guest_reader)
+        dead = next(mob for mob in snapshot["mobs"]
+                    if mob["map"] == 7 and mob["zone"] == 0 and mob["mob_id"] == "3")
+        self.assertFalse(dead["alive"])
+        self.assertEqual(dead["hp"], 0)
+
+        owner_respawn = await asyncio.wait_for(receive(owner_reader), 2.5)
+        guest_respawn = await asyncio.wait_for(receive(guest_reader), 2.5)
+        for event in (owner_respawn, guest_respawn):
+            self.assertEqual(event["type"], "mob_state")
+            self.assertTrue(event["mob"]["alive"])
+            self.assertEqual(event["mob"]["hp"], 100)
+            self.assertEqual(event["attacker_actor_id"], 0)
+        self.assertEqual(room.mobs["7:0:3"]["respawn_at"], 0)
+        owner_writer.close(); guest_writer.close()
+        await owner_writer.wait_closed(); await guest_writer.wait_closed()
+
     async def test_resume_rehydrates_saved_player(self):
         owner_reader, owner_writer, _ = await self.connect("Owner")
         await send(owner_writer, {"cmd": "create", "room": "RESUME"})
@@ -1603,6 +1647,58 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
                          ("error", "drop_owned"))
         owner_writer.close(); guest_writer.close()
         await owner_writer.wait_closed(); await guest_writer.wait_closed()
+
+    async def test_owner_publishes_last_hit_loot_for_remote_killer(self):
+        owner_reader, owner_writer, owner_id = await self.connect("LootOwner")
+        guest_reader, guest_writer, guest_id = await self.connect("LootKiller")
+        third_reader, third_writer, third_id = await self.connect("LootLate")
+        await send(owner_writer, {"cmd": "create", "room": "LASTHIT"})
+        await receive(owner_reader)
+        await send(guest_writer, {"cmd": "join", "room": "LASTHIT"})
+        await receive(guest_reader); await receive(owner_reader)
+        await send(third_writer, {"cmd": "join", "room": "LASTHIT"})
+        await receive(third_reader); await receive(owner_reader); await receive(guest_reader)
+        room = self.state.rooms["LASTHIT"]
+        for player in room.players.values():
+            player.map_id = 22; player.zone_id = 4; player.x = 100; player.y = 200
+
+        async def owner_drop(item_id: int):
+            await send(owner_writer, {"cmd": "drop", "item_id": item_id,
+                                      "template": 42, "item_type": 4,
+                                      "map": 22, "zone": 4, "x": 100, "y": 200,
+                                      "owner": guest_id})
+            events = [await receive(owner_reader), await receive(guest_reader),
+                      await receive(third_reader)]
+            for event in events:
+                self.assertEqual((event["drop"]["owner"], event["drop"]["publisher"]),
+                                 (guest_id, owner_id))
+            return events[0]["drop"]["drop_id"]
+
+        protected_id = await owner_drop(91)
+        await send(owner_writer, {"cmd": "pickup", "drop_id": protected_id})
+        self.assertEqual((await receive(owner_reader))["code"], "drop_owned")
+        await send(guest_writer, {"cmd": "pickup", "drop_id": protected_id})
+        for reader in (owner_reader, guest_reader, third_reader):
+            self.assertEqual((await receive(reader))["player_id"], guest_id)
+
+        unlocked_id = await owner_drop(92)
+        room.drops[unlocked_id]["protected_until"] = 0
+        await send(third_writer, {"cmd": "pickup", "drop_id": unlocked_id})
+        for reader in (owner_reader, guest_reader, third_reader):
+            self.assertEqual((await receive(reader))["player_id"], third_id)
+
+        expired_id = await owner_drop(93)
+        room.drops[expired_id]["expires_at"] = 1
+        await send(owner_writer, {"cmd": "pickup", "drop_id": expired_id})
+        self.assertEqual((await receive(owner_reader))["type"], "drop_taken")
+        self.assertEqual((await receive(owner_reader))["code"], "drop_expired")
+        self.assertEqual((await receive(guest_reader))["type"], "drop_taken")
+        self.assertEqual((await receive(third_reader))["type"], "drop_taken")
+        self.assertNotIn(expired_id, room.drops)
+
+        for writer in (owner_writer, guest_writer, third_writer): writer.close()
+        for writer in (owner_writer, guest_writer, third_writer):
+            await writer.wait_closed()
 
 
 if __name__ == "__main__":

@@ -55,7 +55,8 @@ WIRE_KEYS = ("cmd", "player_id", "protocol", "name", "room", "password",
              "quantity", "locked", "upgrade", "expire", "expires_at", "picker_id",
              "shinwa", "seller_id", "seller_name", "buyer_id", "buyer_name", "category",
              "amount", "attacker", "resume_token", "delivery_id", "party_exp",
-              "activity", "phase", "score", "zone", "protected_until", "item_type")
+             "activity", "phase", "score", "zone", "respawn_seconds", "respawn_at",
+             "protected_until", "item_type", "publisher")
 KEY_TO_ID = {key: index + 1 for index, key in enumerate(WIRE_KEYS)}
 ID_TO_KEY = {value: key for key, value in KEY_TO_ID.items()}
 
@@ -160,4 +161,3 @@ async def send_json(writer: Any, payload: dict[str, Any]) -> None:
     """Compatibility name; writes protocol-v2 binary frames, never JSON."""
     writer.write(encode_frame(payload))
     await writer.drain()
-
