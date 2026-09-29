@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
@@ -11,6 +12,52 @@ from ..models import Player, Room
 from ..protocol import send_json
 
 class CommandsMixin:
+    async def _expire_room_drop(self, room: Room, drop_id: str,
+                                deadline: int) -> None:
+        """Remove one ItemMap at NSO_FINAL's absolute 30-second deadline."""
+        # asyncio timers may resume a fraction before a wall-clock millisecond
+        # boundary. Recheck until the absolute deadline instead of losing the
+        # only expiry task for this row.
+        while True:
+            remaining = deadline - int(time.time() * 1000)
+            if remaining <= 0:
+                break
+            await asyncio.sleep(remaining / 1000.0)
+        if self.rooms.get(room.room_id) is not room:
+            return
+        drop = room.drops.get(drop_id)
+        if drop is None or int(drop.get("expires_at", 0)) != deadline:
+            return
+        room.drops.pop(drop_id, None)
+        room.sequence += 1
+        await self.broadcast(room, {"type": "drop_taken", "seq": room.sequence,
+                                    "drop_id": drop_id, "player_id": ""})
+        self.save_state()
+        self.log_hot_path("drop_expired", room=room.room_id, drop_id=drop_id,
+                          sequence=room.sequence)
+
+    async def _respawn_room_mob(self, room: Room, mob_key: str,
+                                deadline: int) -> None:
+        await asyncio.sleep(max(0.0, (deadline - int(time.time() * 1000)) / 1000.0))
+        if self.rooms.get(room.room_id) is not room:
+            return
+        mob = room.mobs.get(mob_key)
+        if mob is None or mob.get("alive", False) \
+                or int(mob.get("respawn_at", 0)) != deadline:
+            return
+        mob["hp"] = max(1, int(mob.get("max_hp", 1)))
+        mob["alive"] = True
+        mob["respawn_at"] = 0
+        room.sequence += 1
+        await self.broadcast_map(room, int(mob.get("map", 0)),
+            {"type": "mob_state", "seq": room.sequence, "mob": dict(mob),
+             "attacker": "", "attacker_actor_id": 0, "skill": -1},
+            int(mob.get("zone", 0)))
+        self.save_state()
+        self.log_hot_path("mob_respawn", room=room.room_id,
+                          map=mob.get("map", 0), zone=mob.get("zone", 0),
+                          mob_id=mob.get("mob_id", ""), sequence=room.sequence)
+
     async def command(self, player: Player, message: dict[str, Any]) -> None:
         command = clean_text(message.get("cmd"), 24).lower()
         self.log_command(player, command, message)
@@ -213,6 +260,8 @@ class CommandsMixin:
             reported_max = max(1, min(int(message.get("max_hp", 100)), 2000000000))
             reported_hp = max(0, min(int(message.get("hp", reported_max)), reported_max))
             damage = max(0, min(int(message.get("damage", 0)), 1000000))
+            respawn_seconds = max(0, min(
+                int(message.get("respawn_seconds", 0)), 3600))
             # The room creator owns world respawn cadence. A zero-damage,
             # positive-HP projection revives the exact dead/missing mob row;
             # guests cannot forge this transition.
@@ -231,6 +280,7 @@ class CommandsMixin:
                 mob["max_hp"] = reported_max
                 mob["hp"] = reported_hp
                 mob["alive"] = True
+                mob["respawn_at"] = 0
                 room.sequence += 1
                 await self.broadcast(room, {"type": "mob_state", "seq": room.sequence,
                                              "mob": dict(mob), "attacker": "",
@@ -262,6 +312,12 @@ class CommandsMixin:
             mob["level_boss"] = max(0, min(int(message.get("level_boss", mob.get("level_boss", 0))), 255))
             mob["hp"] = max(0, int(mob["hp"]) - damage) if was_alive else reported_hp
             mob["alive"] = mob["hp"] > 0
+            if was_alive and not mob["alive"]:
+                deadline = int(time.time() * 1000) + respawn_seconds * 1000 \
+                    if respawn_seconds > 0 else 0
+                mob["respawn_at"] = deadline
+                if deadline > 0:
+                    asyncio.create_task(self._respawn_room_mob(room, mob_key, deadline))
             room.sequence += 1
             skill = max(-1, min(int(message.get("skill", -1)), 127))
             await self.broadcast(room, {"type": "mob_state", "seq": room.sequence,
@@ -317,10 +373,20 @@ class CommandsMixin:
                 return
             drop_id = f"{player.player_id}-{item_id}"
             now_ms = int(time.time() * 1000)
+            # The owner client is the shared-world executor.  When it
+            # materializes a remotely confirmed death, the fatal hitter is the
+            # NSO_FINAL ItemMap owner; a guest may never forge this override.
+            drop_owner = player.player_id
+            requested_owner = clean_text(message.get("owner"), 64)
+            if requested_owner and player.player_id == room.owner_id:
+                candidate = room.players.get(requested_owner)
+                if candidate is not None and candidate.map_id == map_id \
+                        and candidate.zone_id == zone_id:
+                    drop_owner = requested_owner
             drop = {"drop_id": drop_id, "template": template, "map": map_id,
                     "zone": zone_id,
                     "x": int(message.get("x", player.x)),
-                    "y": int(message.get("y", player.y)), "owner": player.player_id,
+                    "y": int(message.get("y", player.y)), "owner": drop_owner,
                     "quantity": max(1, min(int(message.get("quantity", 1)), 32767)),
                     "item_type": max(-1, min(int(message.get("item_type", -1)), 255)),
                     "locked": bool(message.get("locked", False)),
@@ -331,6 +397,8 @@ class CommandsMixin:
                     "protected_until": now_ms + 20000,
                     "expires_at": now_ms + 30000}
             room.drops[drop_id] = drop
+            asyncio.create_task(self._expire_room_drop(
+                room, drop_id, int(drop["expires_at"])))
             room.sequence += 1
             await self.broadcast(room, {"type": "drop_spawn", "seq": room.sequence,
                                          "drop": dict(drop)})
@@ -435,4 +503,3 @@ class CommandsMixin:
                      text=body if command == "chat" else "<event>", sequence=room.sequence)
             return
         await send_json(player.writer, {"type": "error", "code": "unknown_command"})
-

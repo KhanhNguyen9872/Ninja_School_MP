@@ -1272,6 +1272,50 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(room.mobs["3:0:7"]["alive"])
         writer.close(); await writer.wait_closed()
 
+    async def test_dead_mob_survives_map_return_until_room_respawn_deadline(self):
+        owner_reader, owner_writer, owner_id = await self.connect("Owner")
+        guest_reader, guest_writer, guest_id = await self.connect("Guest")
+        await send(owner_writer, {"cmd": "create", "room": "MOBSTATE"})
+        await receive(owner_reader)
+        await send(guest_writer, {"cmd": "join", "room": "MOBSTATE"})
+        await receive(guest_reader); await receive(owner_reader)
+        room = self.state.rooms["MOBSTATE"]
+        room.players[owner_id].map_id = 7; room.players[owner_id].zone_id = 0
+        room.players[guest_id].map_id = 7; room.players[guest_id].zone_id = 0
+
+        await send(guest_writer, {"cmd": "attack", "mob_id": "3",
+                                  "damage": 100, "hp": 0, "max_hp": 100,
+                                  "respawn_seconds": 2})
+        owner_death = await receive(owner_reader)
+        guest_death = await receive(guest_reader)
+        self.assertFalse(owner_death["mob"]["alive"])
+        self.assertFalse(guest_death["mob"]["alive"])
+        self.assertGreater(room.mobs["7:0:3"]["respawn_at"], int(time.time() * 1000))
+
+        await send(guest_writer, {"cmd": "map", "map": 8, "zone": 0,
+                                  "x": 10, "y": 20})
+        await receive(owner_reader)
+        await send(guest_writer, {"cmd": "map", "map": 7, "zone": 0,
+                                  "x": 10, "y": 20})
+        await receive(owner_reader)
+        await send(guest_writer, {"cmd": "snapshot"})
+        snapshot = await receive(guest_reader)
+        dead = next(mob for mob in snapshot["mobs"]
+                    if mob["map"] == 7 and mob["zone"] == 0 and mob["mob_id"] == "3")
+        self.assertFalse(dead["alive"])
+        self.assertEqual(dead["hp"], 0)
+
+        owner_respawn = await asyncio.wait_for(receive(owner_reader), 2.5)
+        guest_respawn = await asyncio.wait_for(receive(guest_reader), 2.5)
+        for event in (owner_respawn, guest_respawn):
+            self.assertEqual(event["type"], "mob_state")
+            self.assertTrue(event["mob"]["alive"])
+            self.assertEqual(event["mob"]["hp"], 100)
+            self.assertEqual(event["attacker_actor_id"], 0)
+        self.assertEqual(room.mobs["7:0:3"]["respawn_at"], 0)
+        owner_writer.close(); guest_writer.close()
+        await owner_writer.wait_closed(); await guest_writer.wait_closed()
+
     async def test_resume_rehydrates_saved_player(self):
         owner_reader, owner_writer, _ = await self.connect("Owner")
         await send(owner_writer, {"cmd": "create", "room": "RESUME"})
@@ -1601,6 +1645,49 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
         task_denied = await receive(guest_reader)
         self.assertEqual((task_denied["type"], task_denied["code"]),
                          ("error", "drop_owned"))
+        room.drops.pop(task_id, None)
+
+        # The room owner executes shared-world loot, but the server protects
+        # the row for the player whose final hit killed the mob.
+        await send(owner_writer, {"cmd": "drop", "item_id": 79,
+                                  "template": 545, "item_type": 4,
+                                  "owner": guest_id,
+                                  "map": 22, "zone": 26,
+                                  "x": 100, "y": 200})
+        redirected_owner_drop = await receive(owner_reader)
+        redirected_guest_drop = await receive(guest_reader)
+        redirected_id = redirected_guest_drop["drop"]["drop_id"]
+        self.assertEqual(redirected_guest_drop["drop"]["owner"], guest_id)
+        await send(owner_writer, {"cmd": "pickup", "drop_id": redirected_id})
+        redirected_denied = await receive(owner_reader)
+        self.assertEqual((redirected_denied["type"], redirected_denied["code"]),
+                         ("error", "drop_owned"))
+        await send(guest_writer, {"cmd": "pickup", "drop_id": redirected_id})
+        self.assertEqual((await receive(owner_reader))["type"], "drop_taken")
+        self.assertEqual((await receive(guest_reader))["type"], "drop_taken")
+
+        # A non-owner cannot assign its loot to another identity.
+        await send(guest_writer, {"cmd": "drop", "item_id": 80,
+                                  "template": 42, "item_type": 4,
+                                  "owner": owner_id,
+                                  "map": 22, "zone": 26,
+                                  "x": 120, "y": 200})
+        forged_owner_view = await receive(owner_reader)
+        forged_guest_view = await receive(guest_reader)
+        self.assertEqual(forged_guest_view["drop"]["owner"], guest_id)
+
+        # NSO_FINAL removes ordinary ItemMap rows at 30 seconds without
+        # waiting for a later pickup, snapshot or another drop command.
+        expiring_id = forged_guest_view["drop"]["drop_id"]
+        deadline = int(time.time() * 1000) + 20
+        room.drops[expiring_id]["expires_at"] = deadline
+        await self.state._expire_room_drop(room, expiring_id, deadline)
+        expired_owner = await receive(owner_reader)
+        expired_guest = await receive(guest_reader)
+        for expired in (expired_owner, expired_guest):
+            self.assertEqual((expired["type"], expired["drop_id"], expired["player_id"]),
+                             ("drop_taken", expiring_id, ""))
+        self.assertNotIn(expiring_id, room.drops)
         owner_writer.close(); guest_writer.close()
         await owner_writer.wait_closed(); await guest_writer.wait_closed()
 

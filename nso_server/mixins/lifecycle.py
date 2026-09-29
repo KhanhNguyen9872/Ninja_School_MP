@@ -141,6 +141,7 @@ class LifecycleMixin:
             resume_token.encode("utf-8")).hexdigest()
         room.ensure_world()
         room.players[player.player_id] = player
+        self.prune_expired_drops(room)
         self.remember_player(player)
         players = [self.player_snapshot(p) for p in room.players.values()]
         if not players and room.room_id in self.saved_rooms:
@@ -236,4 +237,3 @@ class LifecycleMixin:
         if not room.players:
             self.rooms.pop(room.room_id, None)
         self.save_state()
-
