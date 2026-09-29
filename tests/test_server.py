@@ -464,7 +464,9 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
         room.players[b_id].hp = 100
         await send(a_writer, {"cmd": "interaction", "kind": "pvp_attack",
                               "target_actor": b_actor, "damage": 35, "skill": 4})
-        self.assertEqual((await receive(a_reader))["hp"], 65)
+        nonfatal = await receive(a_reader)
+        self.assertEqual((nonfatal["hp"], nonfatal["attacker"], nonfatal["amount"]),
+                         (65, "Alpha", 0))
         self.assertEqual((await receive(b_reader))["type"], "pvp_hit")
         await send(a_writer, {"cmd": "interaction", "kind": "cuu_sat_clear",
                               "target_actor": 0})
@@ -1527,6 +1529,7 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
         for reader in (fan_reader, target_reader, watch_reader):
             exhausted = await receive(reader)
             self.assertEqual((exhausted["type"], exhausted["hp"]), ("pvp_hit", 0))
+            self.assertEqual((exhausted["attacker"], exhausted["amount"]), ("Fan", 2))
         self.assertEqual((await receive(fan_reader))["type"], "cuu_sat_end")
         self.assertEqual((await receive(target_reader))["type"], "cuu_sat_end")
         self.assertEqual(room.players[target_id].hp, 0)

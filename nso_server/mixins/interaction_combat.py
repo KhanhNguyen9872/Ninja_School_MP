@@ -40,7 +40,13 @@ class CombatInteractionMixin:
                                       "target_id": target.player_id,
                                       "target_actor_id": target.actor_id,
                                       "skill": skill, "damage": damage,
-                                      "hp": target.hp}, player.zone_id)
+                                      "hp": target.hp,
+                                      # NSO_FINAL records the fatal attacker in
+                                      # the victim's enemies and awards +2 PK
+                                      # points for an active cừu-sát relation.
+                                      "attacker": player.name,
+                                      "amount": 2 if target.hp == 0 else 0},
+                                     player.zone_id)
             if target.hp == 0:
                 room.cuu_sat.pop(player.player_id, None)
                 room.cuu_sat.pop(target.player_id, None)
