@@ -30,6 +30,7 @@ EVENT_TYPES = ("welcome", "hello_ok", "room_joined", "error", "pong",
 EVENT_TYPES += ("activity_reward", "activity_state", "activity_closed",
                 "clan_name_assigned", "party_buff", "player_revived",
                 "chan_le_bet", "chan_le_result")
+EVENT_TYPES += ("character_claimed",)
 EVENT_OPCODES = {name: 64 + index for index, name in enumerate(EVENT_TYPES)}
 WIRE_KEYS = ("cmd", "player_id", "protocol", "name", "room", "password",
              "map", "x", "y", "hp", "max_hp", "mob_id", "damage",

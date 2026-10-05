@@ -65,3 +65,6 @@ Dockerfile         Image triển khai
 
 > Server chỉ giữ trạng thái phòng và thế giới dùng chung. Đây không phải máy
 > chủ tài khoản và không đọc hoặc thay thế dữ liệu nhân vật RMS.
+
+## Client1.26.50: khoá phiên theo nhân vật
+Game1.26.50 dùng `storageId` của save để xin quyền mở nhân vật trước khi vào map. Server chặn hai phiên cùng ID trên mọi phòng; khác ID vẫn chơi song song. Mất kết nối giữ8giây chờ lưu/đóng; callback cũ không giải phóng phiên mới. Cần cập nhật server cùng client1.26.50; server cũ không hỗ trợ thao tác claim. Khoá này chỉ dành cho Multiplayer, không phải khoá hai tiến trình Offline dùng chung RMS hoặc các file cloud KStore. Test TCP: `python tests/character_claim_runtime_test.py`.

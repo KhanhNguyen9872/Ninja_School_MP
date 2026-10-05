@@ -5,16 +5,29 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+import time
 
 from ..config import MAX_NAME, MAX_ROOM_PLAYERS, clean_text, password_digest
 from ..models import Player
 from ..protocol import send_json
 
 class LifecycleMixin:
+    def release_character_leases(self, player: Player) -> None:
+        # NSO outZone/save boundary: short grace for an unclean socket departure.
+        # Object identity prevents a late old connection from releasing a successor.
+        for key, claim in list(self.character_leases.items()):
+            if claim[0] is player:
+                self.character_leases[key] = (player, time.monotonic() + 8.0)
+
     async def disconnect(self, player: Player | None) -> None:
         if player is None:
             return
-        self.players.pop(player.player_id, None)
+        active = self.players.get(player.player_id)
+        if active is not None and active is not player:
+            return
+        self.release_character_leases(player)
+        if self.players.get(player.player_id) is player:
+            self.players.pop(player.player_id, None)
         room = self.rooms.get(player.room_id or "")
         if room is not None:
             if room.owner_id == player.player_id:
@@ -26,6 +39,7 @@ class LifecycleMixin:
                                                        "code": "room_owner_left"})
                     except (ConnectionError, OSError):
                         pass
+                    self.release_character_leases(guest)
                     self.players.pop(guest.player_id, None)
                     guest.room_id = None
                     try:
@@ -224,6 +238,7 @@ class LifecycleMixin:
         await self.join(player, room_id, skip_password=True)
 
     async def disconnect_from_room(self, player: Player) -> None:
+        self.release_character_leases(player)
         room = self.rooms.get(player.room_id or "")
         if room is None:
             player.room_id = None

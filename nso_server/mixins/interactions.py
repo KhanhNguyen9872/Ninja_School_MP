@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+import time
 
 from ..config import clean_text
 from ..models import Player, Room
@@ -13,6 +14,31 @@ class InteractionsMixin:
     async def interaction(self, room: Room, player: Player,
                           message: dict[str, Any]) -> None:
         kind = clean_text(message.get("kind"), 32).lower()
+        if kind in ("character_claim", "character_release"):
+            identity = clean_text(message.get("text"), 32)
+            if len(identity) != 16 or any(c not in "0123456789abcdef" for c in identity):
+                await send_json(player.writer, {"type": "error", "code": "character_id_invalid"})
+                return
+            current = self.character_leases.get(identity)
+            if kind == "character_release":
+                if current is not None and current[0] is player:
+                    self.character_leases.pop(identity, None)
+                return
+            now = time.monotonic()
+            if current is not None and current[0] is not player:
+                owner, until = current
+                if self.players.get(owner.player_id) is owner or now < until:
+                    await send_json(player.writer, {"type": "error", "code": "character_online", "data": identity})
+                    return
+            # No await between check and acquisition: the event-loop transaction
+            # excludes other claimants across ALL rooms, not display-name aliases.
+            for key, claim in list(self.character_leases.items()):
+                if claim[0] is player and key != identity:
+                    self.character_leases.pop(key, None)
+            self.character_leases[identity] = (player, float("inf"))
+            await send_json(player.writer, {"type": "character_claimed", "data": identity})
+            return
+
         target = self.target_actor(room, message.get("target_actor"))
         if kind not in ("party_leave", "party_chat", "trade_cancel", "duel_cancel",
                         "party_lock", "dungeon_open",

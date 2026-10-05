@@ -22,6 +22,7 @@ class CoreMixin:
                  trace_hot_path: bool = False) -> None:
         self.rooms: dict[str, Room] = {}
         self.players: dict[str, Player] = {}
+        self.character_leases: dict[str, tuple[Player, float]] = {}
         self.state_file = state_file
         self.saved_rooms: dict[str, list[dict[str, Any]]] = {}
         self.saved_worlds: dict[str, dict[str, Any]] = {}
