@@ -15,7 +15,11 @@ class InteractionsMixin:
                           message: dict[str, Any]) -> None:
         kind = clean_text(message.get("kind"), 32).lower()
         if kind in ("character_claim", "character_release"):
-            identity = clean_text(message.get("text"), 32)
+            # Java sendInteraction encodes its string payload as "data".
+            # Keep the older text-only probes compatible, but never let a
+            # conflicting text value override an explicitly supplied data ID.
+            identity = clean_text(message.get("data") if "data" in message
+                                  else message.get("text"), 32)
             if len(identity) != 16 or any(c not in "0123456789abcdef" for c in identity):
                 await send_json(player.writer, {"type": "error", "code": "character_id_invalid"})
                 return

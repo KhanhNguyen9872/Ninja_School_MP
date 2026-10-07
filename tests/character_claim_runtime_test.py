@@ -29,7 +29,7 @@ async def main():
    await send(writer,2,{'room':'ISO'+str(i),'password':'','cheat_enabled':False});await until(reader,{'room_joined','error'});print('JOINED='+str(i),flush=True)
    clients.append((reader,writer,welcome['player_id']))
   async def claim(index,identity):
-   r,w,_=clients[index];await send(w,13,{'kind':'character_claim','text':identity,'target_actor':0,'damage':0,'skill':0});return await until(r,{'character_claimed','error'})
+   r,w,_=clients[index];await send(w,13,{'kind':'character_claim','data':identity,'target_actor':0,'damage':0,'skill':0});return await until(r,{'character_claimed','error'})
   identity='0123456789abcdef';other='fedcba9876543210'
   a,raw=await claim(0,identity);b,busy=await claim(1,identity)
   if not hasattr(server,'character_leases'):
@@ -60,7 +60,7 @@ async def main():
   await server.disconnect(old)
   assert server.character_leases[identity][0] is successor
   print('GRACE_EXPIRES_AND_OLD_CLOSE_CANNOT_RELEASE_SUCCESSOR=PASS')
-  await send(clients[1][1],13,{'kind':'character_release','text':identity,'target_actor':0,'damage':0,'skill':0})
+  await send(clients[1][1],13,{'kind':'character_release','data':identity,'target_actor':0,'damage':0,'skill':0})
   deadline=time.monotonic()+3
   while identity in server.character_leases and time.monotonic()<deadline:await asyncio.sleep(.01)
   assert identity not in server.character_leases

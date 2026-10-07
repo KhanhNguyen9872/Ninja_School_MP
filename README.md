@@ -68,3 +68,8 @@ Dockerfile         Image triển khai
 
 ## Client1.26.50: khoá phiên theo nhân vật
 Game1.26.50 dùng `storageId` của save để xin quyền mở nhân vật trước khi vào map. Server chặn hai phiên cùng ID trên mọi phòng; khác ID vẫn chơi song song. Mất kết nối giữ8giây chờ lưu/đóng; callback cũ không giải phóng phiên mới. Cần cập nhật server cùng client1.26.50; server cũ không hỗ trợ thao tác claim. Khoá này chỉ dành cho Multiplayer, không phải khoá hai tiến trình Offline dùng chung RMS hoặc các file cloud KStore. Test TCP: `python tests/character_claim_runtime_test.py`.
+
+Sửa lỗi chọn nhân vật sau khi tạo/vào phòng (07/10/2026): server đọc mã nhân vật
+từ `data`, đúng với client .50–.52; vẫn nhận `text` của công cụ cũ. Cần cập nhật
+và khởi động lại tiến trình server để áp dụng. JAR .52 hiện tại không cần thay
+cho sửa này. Kiểm tra: `python -m unittest discover -s tests -p "test_character_claim_payload.py" -v`.
