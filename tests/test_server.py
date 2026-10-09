@@ -651,6 +651,27 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
         a_writer.close(); b_writer.close()
         await a_writer.wait_closed(); await b_writer.wait_closed()
 
+    async def test_clan_seed_keeps_existing_progress_when_room_starts_empty(self):
+        reader, writer, player_id = await self.connect("SeededClan")
+        await send(writer, {"cmd": "create", "room": "CLANSEED"})
+        await receive(reader)
+        room = self.state.rooms["CLANSEED"]
+        player = room.players[player_id]
+        player.appearance = {"name": "SeededClan", "level": 74, "class_id": 1}
+        clan = self.state.ensure_clan(room, player, "Leaf")
+        await self.state.interaction(room, player, {"kind": "clan_seed",
+                                                     "target_actor": 0,
+                                                     "data": "12#345#987654#3#500,7,1,0,1,-1,1=10"})
+        self.assertEqual((clan["level"], clan["exp"], clan["coin"], clan["item_level"]),
+                         (12, 345, 987654, 3))
+        self.assertEqual(clan["items"]["500"]["quantity"], 7)
+        await self.state.interaction(room, player, {"kind": "clan_seed",
+                                                     "target_actor": 0,
+                                                     "data": "3#0#0#0#"})
+        self.assertEqual((clan["level"], clan["coin"], clan["items"]["500"]["quantity"]),
+                         (12, 987654, 7))
+        writer.close(); await writer.wait_closed()
+
     async def test_owner_admin_lists_kicks_and_rotates_room_password(self):
         owner_reader, owner_writer, owner_id = await self.connect("Owner")
         guest_reader, guest_writer, guest_id = await self.connect("Guest")

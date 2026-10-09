@@ -68,6 +68,49 @@ class ClanInteractionMixin:
                 await send_json(player.writer, {"type": "error", "code": "clan_required"})
                 return False
             await send_json(player.writer, self.clan_payload(room, clan))
+        elif kind == "clan_seed":
+            clan = self.clan_for_player(room, player.player_id)
+            if clan is None:
+                await send_json(player.writer, {"type": "error", "code": "clan_required"})
+                return False
+            # A room clan starts as an empty level-1 record because the client
+            # historically sent only its display name. Accept one durable
+            # local snapshot before anyone has changed the shared record.
+            if (int(clan.get("level", 1)) != 1 or int(clan.get("exp", 0)) != 0
+                    or int(clan.get("coin", 0)) != 0
+                    or int(clan.get("item_level", 0)) != 0
+                    or clan.get("items")):
+                return True
+            parts = str(message.get("data", "")).split("#", 4)
+            if len(parts) != 5:
+                await send_json(player.writer, {"type": "error", "code": "clan_seed_invalid"})
+                return False
+            try:
+                level, exp, coin, item_level = (max(1, int(parts[0])), max(0, int(parts[1])),
+                                                max(0, int(parts[2])), max(0, int(parts[3])))
+            except (TypeError, ValueError):
+                await send_json(player.writer, {"type": "error", "code": "clan_seed_invalid"})
+                return False
+            items: dict[str, dict[str, Any]] = {}
+            for raw in parts[4].split(";") if parts[4] else []:
+                fields = raw.split(",", 6)
+                if len(fields) < 7:
+                    continue
+                try:
+                    item, quantity = int(fields[0]), max(0, min(int(fields[1]), 32767))
+                    if item < 0 or quantity <= 0:
+                        continue
+                    items[str(item)] = {"item": item, "quantity": quantity,
+                                        "locked": bool(int(fields[2])),
+                                        "upgrade": max(0, min(int(fields[3]), 127)),
+                                        "sys": max(0, min(int(fields[4]), 127)),
+                                        "expire": int(fields[5]), "options": clean_text(fields[6], 512)}
+                except (TypeError, ValueError):
+                    continue
+            clan["level"] = min(level, 160); clan["exp"] = min(exp, 2147483647)
+            clan["coin"] = min(coin, 2147483647); clan["item_level"] = min(item_level, 127)
+            clan["items"] = items
+            await self.broadcast_clan(room, clan)
         elif kind == "clan_alert":
             clan = self.clan_for_player(room, player.player_id)
             if clan is None or clan.get("leader_id") != player.player_id:
