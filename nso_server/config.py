@@ -17,7 +17,15 @@ SERVER_WRITE_HIGH_WATER = 256 * 1024
 REPLACEABLE_EVENTS = frozenset(("player_state", "mob_state", "world_sync",
                                 "clone_state"))
 BUFFERED_RELIABLE_EVENTS = frozenset(("drop_spawn",))
-HOT_PATH_COMMANDS = frozenset(("state", "world_sync", "attack", "drop", "ping"))
+HOT_PATH_COMMANDS = frozenset(("state", "world_sync", "attack", "drop", "ping",
+                               "snapshot", "chat", "private_chat", "interaction"))
+# Console keeps only lifecycle/failure events unless --verbose or --logs is used.
+IMPORTANT_LOG_EVENTS = frozenset((
+    "room_created", "room_joined", "room_left", "room_closed_owner_left",
+    "join_rejected", "resume_rejected", "room_player_kicked",
+    "room_password_changed", "stale_rooms_discarded", "character_claimed",
+    "server_start", "server_stop", "warning", "error",
+))
 OWNER_RESPONSE_TIMEOUT = 6.0
 
 def clean_text(value: Any, limit: int) -> str:

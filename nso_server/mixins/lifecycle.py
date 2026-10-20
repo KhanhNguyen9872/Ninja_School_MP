@@ -8,10 +8,20 @@ import secrets
 import time
 
 from ..config import MAX_NAME, MAX_ROOM_PLAYERS, clean_text, password_digest
-from ..models import Player
+from ..models import Player, Room
 from ..protocol import send_json
 
 class LifecycleMixin:
+    @staticmethod
+    def index_room_player(room: Room, player: Player) -> None:
+        if player.actor_id:
+            room.actor_index[player.actor_id] = player
+
+    @staticmethod
+    def unindex_room_player(room: Room, player: Player) -> None:
+        if room.actor_index.get(player.actor_id) is player:
+            room.actor_index.pop(player.actor_id, None)
+
     def release_character_leases(self, player: Player) -> None:
         # NSO outZone/save boundary: short grace for an unclean socket departure.
         # Object identity prevents a late old connection from releasing a successor.
@@ -40,6 +50,7 @@ class LifecycleMixin:
                     except (ConnectionError, OSError):
                         pass
                     self.release_character_leases(guest)
+                    self.unindex_room_player(room, guest)
                     self.players.pop(guest.player_id, None)
                     guest.room_id = None
                     try:
@@ -48,10 +59,10 @@ class LifecycleMixin:
                     except (ConnectionError, OSError):
                         pass
                 room.players.clear()
+                room.actor_index.clear()
                 player.room_id = None
                 self.rooms.pop(room.room_id, None)
-                self.saved_rooms.pop(room.room_id, None)
-                self.saved_worlds.pop(room.room_id, None)
+                self.forget_saved_room(room.room_id)
                 self.save_state()
                 self.log("room_closed_owner_left", room=room.room_id,
                          owner=player.player_id, kicked=len(guests))
@@ -104,6 +115,7 @@ class LifecycleMixin:
                                      "loser_actor_id": player.actor_id,
                                      "winner_id": peer_player.player_id,
                                      "winner_actor_id": peer_player.actor_id})
+            self.unindex_room_player(room, player)
             room.players.pop(player.player_id, None)
             await self.broadcast(room, {"type": "player_leave", "player_id": player.player_id})
             self.save_state()
@@ -155,6 +167,7 @@ class LifecycleMixin:
             resume_token.encode("utf-8")).hexdigest()
         room.ensure_world()
         room.players[player.player_id] = player
+        self.index_room_player(room, player)
         self.prune_expired_drops(room)
         self.remember_player(player)
         players = [self.player_snapshot(p) for p in room.players.values()]
@@ -196,12 +209,7 @@ class LifecycleMixin:
         if room is None or room.owner_id not in room.players:
             await send_json(player.writer, {"type": "error", "code": "room_not_found"})
             return
-        rows = self.saved_rooms.get(room_id, [])
-        saved = None
-        for row in rows:
-            if row.get("player_id") == player_id:
-                saved = row
-                break
+        saved = self.saved_player_row(room_id, player_id)
         if saved is None:
             await send_json(player.writer, {"type": "error", "code": "resume_not_found"})
             return
@@ -221,6 +229,8 @@ class LifecycleMixin:
         self.players.pop(player.player_id, None)
         player.player_id = player_id
         player.name = clean_text(saved.get("name"), MAX_NAME) or "player"
+        if room.actor_index.get(player.actor_id) is player:
+            room.actor_index.pop(player.actor_id, None)
         player.actor_id = int(saved.get("actor_id", self.actor_id_for(player_id)))
         appearance = saved.get("appearance", {})
         player.appearance = dict(appearance) if isinstance(appearance, dict) else {}
@@ -244,6 +254,7 @@ class LifecycleMixin:
             player.room_id = None
             return
         await self.clear_cuu_sat_for_player(room, player, "disconnect", True)
+        self.unindex_room_player(room, player)
         room.players.pop(player.player_id, None)
         player.room_id = None
         await self.broadcast(room, {"type": "player_leave", "player_id": player.player_id})

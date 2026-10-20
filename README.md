@@ -27,6 +27,23 @@ python server.py --host 0.0.0.0 --port 8765
 Mặc định server mở cả TCP và UDP. Có thể giới hạn bằng
 `--transport tcp`, `--transport udp` hoặc `--transport both`.
 
+Mặc định console chỉ in sự kiện quan trọng (tạo/join/rời phòng, kick, lỗi).
+Muốn xem toàn bộ log chi tiết như trước:
+
+```bash
+python server.py --verbose
+```
+
+Ghi toàn bộ log ra file thay vì terminal:
+
+```bash
+python server.py --logs logs/server.log --quiet
+```
+
+`--logs logs/server.log` vẫn giữ các dòng quan trọng trên console; thêm
+`--quiet` để tắt hẳn console. `--trace-hot-path` cũ vẫn được giữ như bí danh
+của `--verbose`.
+
 Windows có thể chạy trực tiếp `run-server.cmd`.
 
 Lưu trạng thái phòng vào file riêng:

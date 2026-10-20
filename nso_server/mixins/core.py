@@ -11,55 +11,82 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from ..config import (BUFFERED_RELIABLE_EVENTS, HOT_PATH_COMMANDS, MAX_FRAME,
-                      MAX_PASSWORD, MAX_ROOM, REPLACEABLE_EVENTS,
+from ..config import (BUFFERED_RELIABLE_EVENTS, IMPORTANT_LOG_EVENTS,
+                      MAX_FRAME, MAX_PASSWORD, MAX_ROOM, REPLACEABLE_EVENTS,
                       SERVER_WRITE_HIGH_WATER, clean_text, write_buffer_size)
 from ..models import Player, Room
 from ..protocol import REQUEST_OPCODES, _decode_value, encode_frame, send_json
 
 class CoreMixin:
     def __init__(self, state_file: str | None = None,
-                 trace_hot_path: bool = False) -> None:
+                 trace_hot_path: bool = False,
+                 log_file: str | None = None,
+                 quiet: bool = False) -> None:
         self.rooms: dict[str, Room] = {}
         self.players: dict[str, Player] = {}
         self.character_leases: dict[str, tuple[Player, float]] = {}
         self.state_file = state_file
         self.saved_rooms: dict[str, list[dict[str, Any]]] = {}
         self.saved_worlds: dict[str, dict[str, Any]] = {}
+        self._saved_row_index: dict[tuple[str, str], int] = {}
         self._save_task: asyncio.Task[None] | None = None
         self._save_executor = ThreadPoolExecutor(max_workers=1,
                                                  thread_name_prefix="nso-state")
         self.trace_hot_path = trace_hot_path
+        self.quiet = quiet
+        self._log_stream = (open(log_file, "a", encoding="utf-8", buffering=1)
+                            if log_file else None)
         self._hot_commands: dict[str, int] = {}
         self._hot_log_at = time.monotonic()
         self.load_state()
 
-    @staticmethod
-    def log(event: str, **fields: Any) -> None:
+    def close_log(self) -> None:
+        if self._log_stream is not None:
+            try:
+                self._log_stream.close()
+            finally:
+                self._log_stream = None
+
+    @property
+    def detailed_logs(self) -> bool:
+        return self.trace_hot_path or self._log_stream is not None
+
+    def log(self, event: str, **fields: Any) -> None:
+        important = event in IMPORTANT_LOG_EVENTS
+        if not important and not self.detailed_logs:
+            return
         record = {"time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "event": event}
         record.update(fields)
         # ASCII-escaped JSON keeps Windows cp1252 consoles from terminating a
         # live client handler when a name/chat contains Vietnamese or emoji.
-        print(json.dumps(record, ensure_ascii=True, separators=(",", ":")), flush=True)
+        line = json.dumps(record, ensure_ascii=True, separators=(",", ":"))
+        if self._log_stream is not None:
+            try:
+                print(line, file=self._log_stream, flush=True)
+            except (OSError, ValueError):
+                pass
+        if not self.quiet and (important or self.trace_hot_path):
+            print(line, flush=True)
 
     def log_command(self, player: Player, command: str,
                     message: dict[str, Any]) -> None:
+        # Every frame is already counted by the protocol; command detail is
+        # opt-in so the default console stays readable and flush-free.
+        if not self.detailed_logs:
+            return
         fields = {"player_id": player.player_id, "name": player.name,
                   "room": player.room_id or clean_text(message.get("room"), MAX_ROOM).upper(),
                   "command": command, "map": message.get("map", player.map_id),
                   "password_supplied": bool(clean_text(message.get("password"), MAX_PASSWORD))}
-        if self.trace_hot_path or command not in HOT_PATH_COMMANDS:
-            self.log("command", **fields)
-            return
-        self.record_hot_path("command:" + command)
+        self.log("command", **fields)
 
     def log_hot_path(self, event: str, **fields: Any) -> None:
-        if self.trace_hot_path:
+        if self.detailed_logs:
             self.log(event, **fields)
-            return
-        self.record_hot_path("event:" + event)
 
     def record_hot_path(self, key: str) -> None:
+        # Retained for explicit diagnostics; the default console no longer
+        # emits per-second summaries (they are verbose detail, not lifecycle).
         self._hot_commands[key] = self._hot_commands.get(key, 0) + 1
         now = time.monotonic()
         if now - self._hot_log_at >= 1.0:
@@ -68,7 +95,9 @@ class CoreMixin:
             self._hot_commands.clear()
             self._hot_log_at = now
 
-    async def broadcast(self, room: Room, payload: dict[str, Any], exclude: str | None = None) -> None:
+    async def broadcast(self, room: Room, payload: dict[str, Any],
+                        exclude: str | None = None,
+                        visible: set[int] | None = None) -> None:
         dead: list[str] = []; recipients = []; frame = encode_frame(payload)
         event_type = payload.get("type")
         # Living HP projections may be coalesced because a later hit repairs
@@ -90,6 +119,8 @@ class CoreMixin:
         buffered_reliable = payload.get("type") in BUFFERED_RELIABLE_EVENTS
         for player_id, player in tuple(room.players.items()):
             if player_id == exclude:
+                continue
+            if visible is not None and player.map_id not in visible:
                 continue
             # Drop an obsolete projection for a slow receiver instead of
             # accumulating unbounded state; the following projection repairs
@@ -169,6 +200,9 @@ class CoreMixin:
             wanted = int(actor_id)
         except (TypeError, ValueError):
             return None
+        candidate = room.actor_index.get(wanted)
+        if candidate is not None and room.players.get(candidate.player_id) is candidate:
+            return candidate
         return next((candidate for candidate in room.players.values()
                      if candidate.actor_id == wanted), None)
 

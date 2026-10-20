@@ -259,6 +259,79 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
         owner_writer.close(); guest_writer.close()
         await owner_writer.wait_closed(); await guest_writer.wait_closed()
 
+    async def test_hot_movement_frames_omit_redundant_sequence(self):
+        a_reader, a_writer, _ = await self.connect("Mover")
+        b_reader, b_writer, _ = await self.connect("Observer")
+        await send(a_writer, {"cmd": "create", "room": "LEANSTATE"})
+        await receive(a_reader)
+        await send(b_writer, {"cmd": "join", "room": "LEANSTATE"})
+        await receive(b_reader); await receive(a_reader)
+
+        await send(a_writer, {"cmd": "state", "map": 22, "x": 10, "y": 20,
+                              "hp": 100})
+        state = await receive(b_reader)
+        self.assertEqual(state["type"], "player_state")
+        self.assertNotIn("seq", state)
+
+        await send(a_writer, {"cmd": "attack", "mob_id": "5", "damage": 30,
+                              "hp": 70, "max_hp": 100, "drop_template": 42})
+        hits = [await receive(a_reader), await receive(b_reader)]
+        self.assertTrue(all(event["type"] == "mob_state" for event in hits))
+        self.assertTrue(all("seq" not in event for event in hits))
+
+        await send(a_writer, {"cmd": "map", "map": 23, "x": 11, "y": 21})
+        move = await receive(b_reader)
+        self.assertEqual(move["type"], "map_transition")
+        self.assertNotIn("seq", move)
+
+        for writer in (a_writer, b_writer):
+            writer.close()
+        for writer in (a_writer, b_writer):
+            await writer.wait_closed()
+
+    async def test_guest_state_is_map_scoped_but_owner_stays_room_wide(self):
+        owner_reader, owner_writer, _ = await self.connect("Owner")
+        b_reader, b_writer, _ = await self.connect("GuestB")
+        c_reader, c_writer, _ = await self.connect("GuestC")
+        await send(owner_writer, {"cmd": "create", "room": "SCOPED"})
+        await receive(owner_reader)
+        for reader, writer in ((b_reader, b_writer), (c_reader, c_writer)):
+            await send(writer, {"cmd": "join", "room": "SCOPED"})
+            await receive(reader)
+            await receive(owner_reader)
+        await receive(b_reader)
+
+        await send(c_writer, {"cmd": "state", "map": 1, "zone": 9,
+                              "x": 50, "y": 60, "hp": 100})
+        self.assertEqual((await receive(owner_reader))["zone"], 9)
+        self.assertEqual((await receive(b_reader))["zone"], 9)
+
+        await send(b_writer, {"cmd": "state", "map": 1, "x": 10, "y": 20,
+                              "hp": 100})
+        self.assertEqual((await receive(owner_reader))["map"], 1)
+        self.assertEqual((await receive(c_reader))["map"], 1)
+
+        await send(b_writer, {"cmd": "state", "map": 2, "x": 30, "y": 40,
+                              "hp": 100})
+        self.assertEqual((await receive(owner_reader))["map"], 2)
+        self.assertEqual((await receive(c_reader))["map"], 2)
+
+        await send(b_writer, {"cmd": "state", "map": 2, "x": 31, "y": 41,
+                              "hp": 100})
+        for reader in (owner_reader, c_reader):
+            with self.assertRaises(asyncio.TimeoutError):
+                await asyncio.wait_for(receive(reader), 0.08)
+
+        await send(owner_writer, {"cmd": "state", "map": 1, "x": 12, "y": 22,
+                                  "hp": 100})
+        self.assertEqual((await receive(b_reader))["map"], 1)
+        self.assertEqual((await receive(c_reader))["map"], 1)
+
+        for writer in (owner_writer, b_writer, c_writer):
+            writer.close()
+        for writer in (owner_writer, b_writer, c_writer):
+            await writer.wait_closed()
+
     async def test_state_dedup_and_room_wide_mob_drop_projection(self):
         a_reader, a_writer, a_id = await self.connect("Attacker")
         b_reader, b_writer, _ = await self.connect("WatcherB")

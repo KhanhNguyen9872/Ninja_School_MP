@@ -36,6 +36,7 @@ class Room:
     cheat_enabled: bool = False
     password_hash: str = ""
     players: dict[str, Player] = field(default_factory=dict)
+    actor_index: dict[int, Player] = field(default_factory=dict, repr=False)
     sequence: int = 0
     mobs: dict[str, dict[str, Any]] = field(default_factory=dict)
     drops: dict[str, dict[str, Any]] = field(default_factory=dict)

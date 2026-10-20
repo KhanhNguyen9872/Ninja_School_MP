@@ -28,6 +28,7 @@ class PersistenceMixin:
                 len(worlds) if isinstance(worlds, dict) else 0)
             self.saved_rooms = {}
             self.saved_worlds = {}
+            self._saved_row_index = {}
             if stale:
                 self.log("stale_rooms_discarded", entries=stale)
         except FileNotFoundError:
@@ -153,15 +154,38 @@ class PersistenceMixin:
             seed = sum(ord(char) for char in player_id)
         return 1000000000 + seed % 800000000
 
+    def saved_player_row(self, room_id: str, player_id: str) -> dict[str, Any] | None:
+        rows = self.saved_rooms.get(room_id, [])
+        key = (room_id, player_id)
+        index = self._saved_row_index.get(key)
+        if index is not None and index < len(rows) \
+                and rows[index].get("player_id") == player_id:
+            return rows[index]
+        for index, row in enumerate(rows):
+            if row.get("player_id") == player_id:
+                self._saved_row_index[key] = index
+                return row
+        return None
+
+    def forget_saved_room(self, room_id: str) -> None:
+        self.saved_rooms.pop(room_id, None)
+        self.saved_worlds.pop(room_id, None)
+        stale = [key for key in self._saved_row_index if key[0] == room_id]
+        for key in stale:
+            self._saved_row_index.pop(key, None)
+
     def remember_player(self, player: Player) -> None:
         if not player.room_id:
             return
         rows = self.saved_rooms.setdefault(player.room_id, [])
-        for index, row in enumerate(rows):
-            if row.get("player_id") == player.player_id:
-                rows[index] = self.persistent_player_snapshot(player)
-                return
+        key = (player.room_id, player.player_id)
+        index = self._saved_row_index.get(key)
+        if index is not None and index < len(rows) \
+                and rows[index].get("player_id") == player.player_id:
+            rows[index] = self.persistent_player_snapshot(player)
+            return
         rows.append(self.persistent_player_snapshot(player))
+        self._saved_row_index[key] = len(rows) - 1
 
     @staticmethod
     def clean_int_list(value: Any, count: int, minimum: int, maximum: int) -> list[int]:

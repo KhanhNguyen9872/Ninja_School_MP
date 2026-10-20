@@ -155,7 +155,7 @@ class CommandsMixin:
             clone = self.clean_clone(message, player)
             player.clone = clone
             room.sequence += 1
-            await self.broadcast(room, {"type": "clone_state", "seq": room.sequence,
+            await self.broadcast(room, {"type": "clone_state",
                                          "player_id": player.player_id,
                                          "clone_actor_id": self.actor_id_for(player.player_id + "#clone"),
                                          "clone": dict(clone)}, player.player_id)
@@ -241,7 +241,7 @@ class CommandsMixin:
             player.x = int(message.get("x", player.x))
             player.y = int(message.get("y", player.y))
             room.sequence += 1
-            await self.broadcast(room, {"type": "map_transition", "seq": room.sequence,
+            await self.broadcast(room, {"type": "map_transition",
                                          "player_id": player.player_id, "actor_id": player.actor_id,
                                          "map": player.map_id, "zone": player.zone_id,
                                          "x": player.x, "y": player.y}, player.player_id)
@@ -282,7 +282,7 @@ class CommandsMixin:
                 mob["alive"] = True
                 mob["respawn_at"] = 0
                 room.sequence += 1
-                await self.broadcast(room, {"type": "mob_state", "seq": room.sequence,
+                await self.broadcast(room, {"type": "mob_state",
                                              "mob": dict(mob), "attacker": "",
                                              "attacker_actor_id": 0, "skill": -1})
                 self.save_state()
@@ -303,7 +303,7 @@ class CommandsMixin:
                 if reported_hp > 0:
                     await send_json(player.writer, {"type": "error", "code": "mob_not_found"})
                 else:
-                    await send_json(player.writer, {"type": "mob_state", "seq": room.sequence,
+                    await send_json(player.writer, {"type": "mob_state",
                                                     "mob": dict(mob), "attacker": player.player_id})
                 return
             was_alive = bool(mob.get("alive", False))
@@ -320,7 +320,7 @@ class CommandsMixin:
                     asyncio.create_task(self._respawn_room_mob(room, mob_key, deadline))
             room.sequence += 1
             skill = max(-1, min(int(message.get("skill", -1)), 127))
-            await self.broadcast(room, {"type": "mob_state", "seq": room.sequence,
+            await self.broadcast(room, {"type": "mob_state",
                                          "mob": dict(mob), "attacker": player.player_id,
                                          "attacker_actor_id": player.actor_id,
                                          "skill": skill})
@@ -459,6 +459,7 @@ class CommandsMixin:
             state = (next_map, next_zone, next_x, next_y, next_hp)
             if player.last_state == state:
                 return
+            previous_map, previous_zone = player.map_id, player.zone_id
             player.map_id = next_map
             player.zone_id = next_zone
             player.x = next_x
@@ -466,10 +467,20 @@ class CommandsMixin:
             player.hp = next_hp
             player.last_state = state
             room.sequence += 1
-            await self.broadcast(room, {"type": "player_state", "seq": room.sequence, "player_id": player.player_id,
+            # The owner's map/HP must stay authoritative for every guest, but
+            # guest movement is only visible on the old and new map. Zone
+            # changes on one map still publish, because peers there need the
+            # position before they can render or target the player. The client
+            # requests a fresh snapshot when it loads a map, so peers which
+            # were on neither side cannot hold a stale visible row.
+            visible = None
+            if player.player_id != room.owner_id:
+                visible = {previous_map, player.map_id}
+            await self.broadcast(room, {"type": "player_state", "player_id": player.player_id,
                                          "actor_id": player.actor_id,
                                          "map": player.map_id, "zone": player.zone_id,
-                                         "x": player.x, "y": player.y, "hp": player.hp}, player.player_id)
+                                         "x": player.x, "y": player.y, "hp": player.hp},
+                                 player.player_id, visible)
             self.save_state()
             if self.trace_hot_path:
                 self.log("player_state", room=room.room_id, player_id=player.player_id,
