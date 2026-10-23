@@ -136,6 +136,8 @@ class CombatMixin:
         if combat.get("v") != 1 or int(combat.get("skill", -1)) != skill \
                 or int(combat.get("attack_type", 0)) != 1:
             return await reject("combat_profile_missing")
+        if skill == 24 and int(combat.get("bind_ms", 0)) <= 0:
+            return await reject("combat_profile_missing")
         if int(player.appearance.get("weapon", -1)) < 0 \
                 or self.combat_effect(player, "locked_ms"):
             return await reject("combatant_locked")
@@ -159,4 +161,17 @@ class CombatMixin:
         player.pvp_ready_at[skill] = now + int(combat.get("cooldown", 0)) / 1000.0
         if not free:
             player.appearance["mp"] = max(0, int(player.appearance.get("mp", 0)) - mana)
+        if skill == 24:
+            # NSO_FINAL Char.attackCharacter installs Effect18 and returns
+            # before the damage/crit/stealth branch; protection is not a miss.
+            target.pvp_bound_until = now + int(combat["bind_ms"]) / 1000.0
+            player.last_pvp_fatal = False
+            return 0
         return self.authoritative_pvp_damage(player, target)
+
+    @staticmethod
+    def pvp_bind_payload(target: Player, skill: int) -> dict[str, int]:
+        if skill != 24:
+            return {}
+        remaining = max(0, int((target.pvp_bound_until - time.monotonic()) * 1000))
+        return {"template": 18, "quantity": remaining}

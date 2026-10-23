@@ -166,6 +166,8 @@ class LifecycleMixin:
         player.resume_token_hash = hashlib.sha256(
             resume_token.encode("utf-8")).hexdigest()
         room.ensure_world()
+        player.actor_id = self.room_actor_id(room, player.player_id, player.actor_id)
+        self.room_actor_id(room, player.player_id + "#clone")
         room.players[player.player_id] = player
         self.index_room_player(room, player)
         self.prune_expired_drops(room)
@@ -182,7 +184,7 @@ class LifecycleMixin:
                                         "drops": list(room.drops.values()),
                                         "shinwa": list(room.shinwa.values()),
                                         "clones": [dict(getattr(p, "clone", {}), player_id=p.player_id,
-                                                        clone_actor_id=self.actor_id_for(p.player_id + "#clone"))
+                                                        clone_actor_id=self.room_actor_id(room, p.player_id + "#clone"))
                                                    for p in room.players.values()
                                                    if getattr(p, "clone", {}).get("active")]})
         for event in list(room.pending_deliveries.get(player.player_id, {}).values()):
@@ -202,6 +204,11 @@ class LifecycleMixin:
 
     async def resume(self, player: Player, player_id: str, room_id: str,
                      resume_token: str) -> None:
+        # Resumption changes connection identity: only a fresh socket may do it.
+        # Mutating an already joined player would strand its old room key/index.
+        if player.room_id:
+            await send_json(player.writer, {"type": "error", "code": "resume_already_joined"})
+            return
         if not player_id or not room_id or not resume_token:
             await send_json(player.writer, {"type": "error", "code": "resume_fields_required"})
             return

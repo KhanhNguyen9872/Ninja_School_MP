@@ -31,6 +31,8 @@ class Player:
     revive_protected_until: float = 0.0
     pvp_ready_at: dict[int, float] = field(default_factory=dict)
     last_pvp_fatal: bool = False
+    # Transient authoritative Effect18/type14; never renewed by appearance.
+    pvp_bound_until: float = 0.0
 
 @dataclass
 class Room:
@@ -40,6 +42,8 @@ class Room:
     password_hash: str = ""
     players: dict[str, Player] = field(default_factory=dict)
     actor_index: dict[int, Player] = field(default_factory=dict, repr=False)
+    # Room-lifetime primary/clone IDs stay reserved across guest reconnects.
+    actor_ids: dict[str, int] = field(default_factory=dict, repr=False)
     sequence: int = 0
     mobs: dict[str, dict[str, Any]] = field(default_factory=dict)
     drops: dict[str, dict[str, Any]] = field(default_factory=dict)

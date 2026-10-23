@@ -40,6 +40,7 @@ class CombatInteractionMixin:
                                       "target_id": target.player_id,
                                       "target_actor_id": target.actor_id,
                                       "skill": skill,
+                                      **self.pvp_bind_payload(target, skill),
                                       "damage": -damage if player.last_pvp_fatal else damage,
                                       "hp": target.hp,
                                       # NSO_FINAL records the fatal attacker in

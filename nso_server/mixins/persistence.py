@@ -170,6 +170,26 @@ class PersistenceMixin:
             seed = sum(ord(char) for char in player_id)
         return 1000000000 + seed % 800000000
 
+    def room_actor_id(self, room: Room, identity: str, preferred: int = 0) -> int:
+        """Allocate an unambiguous wire ID within the live owner's room lease.
+
+        Hashes are compatibility preferences, not unique identities. Reserve
+        primary and clone IDs together on join; keep them when guests leave so
+        reconnects and pending events never bind an old ID to another player.
+        Rooms intentionally disappear when their owner leaves or on restart.
+        """
+        existing = room.actor_ids.get(identity)
+        if existing is not None:
+            return existing
+        used = set(room.actor_ids.values())
+        used.update(p.actor_id for p in room.players.values()
+                    if p.player_id != identity and p.actor_id)
+        candidate = preferred if 0 < preferred < 2147483647 else self.actor_id_for(identity)
+        while candidate in used:
+            candidate = 1000000000 + (candidate - 1000000000 + 1) % 800000000
+        room.actor_ids[identity] = candidate
+        return candidate
+
     def saved_player_row(self, room_id: str, player_id: str) -> dict[str, Any] | None:
         rows = self.saved_rooms.get(room_id, [])
         key = (room_id, player_id)
@@ -245,6 +265,7 @@ class PersistenceMixin:
                           dx=combat_number("dx", maximum=2000), dy=combat_number("dy", maximum=2000),
                           mana=combat_number("mana", maximum=65535),
                           cooldown=combat_number("cooldown", maximum=3600000),
+                          bind_ms=combat_number("bind_ms", maximum=600000),
                           free_mana=combat_number("free_mana", maximum=1), _at=int(time.monotonic() * 1000))
         return {"name": clean_text(message.get("name"), MAX_NAME),
                 "class_id": number("class_id", 0, 0, 6),

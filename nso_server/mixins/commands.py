@@ -117,6 +117,15 @@ class CommandsMixin:
             await send_json(player.writer, {"type": "error", "code": "join_room_first"})
             return
         room = self.rooms[player.room_id]
+        # Effect18 locks ordinary same-map movement, not attacks or legitimate
+        # world transitions. Preserve HP reports even if a stale MOVE is clamped.
+        if command in ("state", "map") and player.pvp_bound_until > time.monotonic() \
+                and int(message.get("map", player.map_id)) == player.map_id \
+                and max(0, int(message.get("zone", player.zone_id))) == player.zone_id \
+                and (int(message.get("x", player.x)) != player.x
+                     or int(message.get("y", player.y)) != player.y):
+            message = dict(message, x=player.x, y=player.y)
+            await send_json(player.writer, {"type": "error", "code": "movement_locked"})
         room.ensure_world()
         if command == "snapshot":
             self.prune_expired_drops(room)
@@ -128,7 +137,7 @@ class CommandsMixin:
                                             "drops": list(room.drops.values()),
                                             "shinwa": list(room.shinwa.values()),
                                             "clones": [dict(getattr(p, "clone", {}), player_id=p.player_id,
-                                                            clone_actor_id=self.actor_id_for(p.player_id + "#clone"))
+                                                            clone_actor_id=self.room_actor_id(room, p.player_id + "#clone"))
                                                        for p in room.players.values()
                                                        if getattr(p, "clone", {}).get("active")]})
             return
@@ -157,7 +166,7 @@ class CommandsMixin:
             room.sequence += 1
             await self.broadcast(room, {"type": "clone_state",
                                          "player_id": player.player_id,
-                                         "clone_actor_id": self.actor_id_for(player.player_id + "#clone"),
+                                         "clone_actor_id": self.room_actor_id(room, player.player_id + "#clone"),
                                          "clone": dict(clone)}, player.player_id)
             self.save_state()
             self.log("clone_state", room=room.room_id, player_id=player.player_id,

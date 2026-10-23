@@ -144,6 +144,7 @@ class TradeInteractionMixin:
                                       "target_id": target.player_id,
                                       "target_actor_id": target.actor_id,
                                       "skill": skill,
+                                      **self.pvp_bind_payload(target, skill),
                                       "damage": -damage if player.last_pvp_fatal else damage,
                                       "hp": target.hp}, player.zone_id)
             if target.hp == 0:
