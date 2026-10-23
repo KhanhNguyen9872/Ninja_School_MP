@@ -44,6 +44,7 @@ class Room:
     party_invites: dict[str, str] = field(default_factory=dict)
     party_locked: dict[str, bool] = field(default_factory=dict)
     party_dungeons: dict[str, int] = field(default_factory=dict)
+    dungeon_runs: dict[str, dict[str, Any]] = field(default_factory=dict)
     trades: dict[str, dict[str, Any]] = field(default_factory=dict)
     duels: dict[str, str] = field(default_factory=dict)
     friend_requests: dict[str, str] = field(default_factory=dict)

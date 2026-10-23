@@ -63,6 +63,7 @@ class PersistenceMixin:
                                "parties": room.parties,
                                "party_locked": room.party_locked,
                                "party_dungeons": room.party_dungeons,
+                               "dungeon_runs": room.dungeon_runs,
                                "trades": room.trades,
                                "friends": room.friends,
                                "friend_requests": room.friend_requests,

@@ -44,21 +44,25 @@ class InteractionsMixin:
             return
 
         target = self.target_actor(room, message.get("target_actor"))
+        # The clan leader is not in their own client's remote actor list.
+        # Native self-withdrawal uses target zero, never an offline mutation.
+        if kind == "clan_item_send" and str(message.get("target_actor", 0)) == "0":
+            target = player
         if kind not in ("party_leave", "party_chat", "trade_cancel", "duel_cancel",
                         "party_lock", "dungeon_open",
                         "clan_chat", "clan_state_request", "clan_seed", "clan_leave",
                         "clan_alert", "clan_contribute", "clan_points", "clan_upgrade",
-                        "clan_item_upgrade", "clan_pet", "clan_territory_open",
+                        "clan_item_upgrade", "clan_pet", "clan_territory_open", "clan_territory_sync", "clan_territory_close",
                         "clan_store_buy", "clan_item_use", "clan_pet_sync",
                         "clan_war_accept", "clan_war_points",
                         "cuu_sat_clear", "shinwa_publish", "shinwa_buy",
-                        "shinwa_remove", "vxmm_bet", "vxmm_result", "chan_le_bet",
+                        "shinwa_remove", "shinwa_reclaim", "vxmm_bet", "vxmm_result", "chan_le_bet",
                         "chan_le_result", "rank_report",
                         "dungeon_finish", "delivery_ack", "room_password",
                         "world_packet", "activity_reward", "party_buff") and target is None:
             await send_json(player.writer, {"type": "error", "code": "player_not_found"})
             return
-        if target is player and kind != "clan_seed":
+        if target is player and kind not in ("clan_seed", "clan_item_send"):
             await send_json(player.writer, {"type": "error", "code": "self_interaction"})
             return
         if target is not None and kind in ("trade_invite", "trade_accept",
@@ -73,10 +77,10 @@ class InteractionsMixin:
                 "actor_id": player.actor_id, "name": player.name,
                 "map": player.map_id, "zone": player.zone_id}
         handled = False
-        if kind in ('mob_attack', 'mob_yen', 'world_packet', 'activity_reward', 'room_password', 'room_kick', 'delivery_ack', 'friend_invite', 'shinwa_publish', 'shinwa_buy', 'shinwa_remove', 'vxmm_bet', 'vxmm_result', 'chan_le_bet', 'chan_le_result', 'dungeon_finish', 'rank_report', 'friend_remove'):
+        if kind in ('mob_attack', 'mob_yen', 'world_packet', 'activity_reward', 'room_password', 'room_kick', 'delivery_ack', 'friend_invite', 'shinwa_publish', 'shinwa_buy', 'shinwa_remove', 'shinwa_reclaim', 'vxmm_bet', 'vxmm_result', 'chan_le_bet', 'chan_le_result', 'dungeon_finish', 'rank_report', 'friend_remove'):
             handled = await self.handle_gameplay_interaction(
                 room, player, target, message, base, kind)
-        elif kind in ('clan_invite', 'clan_accept', 'clan_chat', 'clan_state_request', 'clan_seed', 'clan_alert', 'clan_role', 'clan_kick', 'clan_leave', 'clan_contribute', 'clan_points', 'clan_upgrade', 'clan_item_upgrade', 'clan_store_buy', 'clan_item_send', 'clan_item_use', 'clan_pet', 'clan_pet_sync', 'clan_territory_open', 'clan_war_invite', 'clan_war_accept', 'clan_war_points'):
+        elif kind in ('clan_invite', 'clan_accept', 'clan_chat', 'clan_state_request', 'clan_seed', 'clan_alert', 'clan_role', 'clan_kick', 'clan_leave', 'clan_contribute', 'clan_points', 'clan_upgrade', 'clan_item_upgrade', 'clan_store_buy', 'clan_item_send', 'clan_item_use', 'clan_pet', 'clan_pet_sync', 'clan_territory_open', 'clan_territory_invite', 'clan_territory_sync', 'clan_territory_close', 'clan_war_invite', 'clan_war_accept', 'clan_war_points'):
             handled = await self.handle_clan_interaction(
                 room, player, target, message, base, kind)
         elif kind in ('cuu_sat', 'cuu_sat_clear', 'pvp_attack', 'view_notice', 'party_buff', 'player_revive'):

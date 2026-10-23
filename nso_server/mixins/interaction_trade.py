@@ -16,6 +16,16 @@ class TradeInteractionMixin:
         if kind == "trade_invite":
             await send_json(target.writer, dict(base, type="trade_invite"))
         elif kind == "trade_accept":
+            participants = (player.player_id, target.player_id)
+            if any(event.get("type") == "trade_commit"
+                   for participant in participants
+                   for event in room.pending_deliveries.get(participant, {}).values()):
+                await send_json(player.writer, {"type": "error", "code": "trade_pending"})
+                return False
+            if any(participant in trade.get("players", [])
+                   for participant in participants for trade in room.trades.values()):
+                await send_json(player.writer, {"type": "error", "code": "trade_busy"})
+                return False
             trade_id = "-".join(sorted((player.player_id, target.player_id)))
             room.trades[trade_id] = {"players": [target.player_id, player.player_id],
                                      "offers": {}, "accepts": []}
@@ -34,6 +44,9 @@ class TradeInteractionMixin:
                 return False
             peer_id = next((value for value in trade["players"] if value != player.player_id), "")
             peer = room.players.get(peer_id)
+            if kind in ("trade_offer", "trade_confirm") and trade.get("transaction"):
+                await send_json(player.writer, {"type": "error", "code": "trade_locked"})
+                return False
             if kind == "trade_offer":
                 offer = clean_text(message.get("data"), 12000)
                 trade["offers"][player.player_id] = offer
@@ -55,6 +68,7 @@ class TradeInteractionMixin:
                             await send_json(participant.writer,
                                             {"type": "trade_prepare", "seq": room.sequence,
                                              "transaction": transaction,
+                                             "own_offer": trade["offers"].get(participant_id, ""),
                                              "peer_offer": trade["offers"].get(other_id, "")})
             elif kind == "trade_ready":
                 transaction = clean_text(message.get("data"), 64)
@@ -64,23 +78,47 @@ class TradeInteractionMixin:
                 ready = trade.setdefault("ready", [])
                 if player.player_id not in ready: ready.append(player.player_id)
                 if len(ready) == 2 and peer is not None:
+                    deliveries = []
+                    # Stage BOTH obligations and remove the transient trade before
+                    # any await: one failed writer must not strand the other side.
                     for participant_id in trade["players"]:
-                        participant = room.players.get(participant_id)
                         other_id = next(value for value in trade["players"] if value != participant_id)
-                        if participant is not None:
-                            await self.durable_delivery(
-                                room, participant_id,
-                                {"type": "trade_commit", "seq": room.sequence,
+                        delivery_id = "trade-" + transaction + "-" + participant_id
+                        event = {"type": "trade_commit", "seq": room.sequence,
                                  "transaction": transaction,
-                                 "peer_offer": trade["offers"].get(other_id, "")},
-                                "trade-" + transaction + "-" + participant_id)
+                                 "own_offer": trade["offers"].get(participant_id, ""),
+                                 "peer_offer": trade["offers"].get(other_id, ""),
+                                 "delivery_id": delivery_id}
+                        room.pending_deliveries.setdefault(participant_id, {})[delivery_id] = event
+                        deliveries.append((participant_id, event))
                     room.trades.pop(trade_key, None)
+                    self.save_state()
+                    await self.flush_state()
+                    for participant_id, event in deliveries:
+                        participant = room.players.get(participant_id)
+                        if participant is not None:
+                            try:
+                                await send_json(participant.writer, event)
+                            except (ConnectionError, OSError):
+                                pass  # reconnect replays the already durable event
+
             else:
-                payload = {"type": "trade_cancel", "seq": room.sequence}
-                if peer is not None:
-                    await send_json(peer.writer, payload)
-                await send_json(player.writer, payload)
+                transaction = str(trade.get("transaction", ""))
+                payload = {"type": "trade_cancel", "seq": room.sequence, "transaction": transaction}
                 room.trades.pop(trade_key, None)
+                events = []
+                for member in (player, peer):
+                    if member is None: continue
+                    event = dict(payload)
+                    if transaction:
+                        delivery = "trade-cancel-" + transaction + "-" + member.player_id
+                        event["delivery_id"] = delivery
+                        room.pending_deliveries.setdefault(member.player_id, {})[delivery] = event
+                    events.append((member, event))
+                self.save_state(); await self.flush_state()
+                for member, event in events:
+                    try: await send_json(member.writer, event)
+                    except (ConnectionError, OSError): pass
         elif kind == "duel_invite":
             await send_json(target.writer, dict(base, type="duel_invite"))
         elif kind == "duel_accept":

@@ -13,6 +13,8 @@ class ClanInteractionMixin:
     async def handle_clan_interaction(
             self, room: Room, player: Player, target: Player | None,
             message: dict[str, Any], base: dict[str, Any], kind: str) -> bool:
+        current_clan = self.clan_for_player(room, player.player_id)
+        if current_clan is not None: self.refresh_clan_territory(current_clan)
         if kind == "clan_invite":
             clan_name = clean_text(message.get("data"), MAX_NAME)
             if not clan_name:
@@ -236,7 +238,13 @@ class ClanInteractionMixin:
             except (ValueError, IndexError):
                 await send_json(player.writer, {"type": "error", "code": "clan_item_invalid"})
                 return False
-            quantity = max(1, min(quantity, 32767)); unit = max(0, min(unit, 2000000000))
+            # Clients can share an old warehouse snapshot. Admission must be
+            # atomic here too: never charge the full price for a clipped stack.
+            old_quantity = int(clan.get("items", {}).get(str(item), {}).get("quantity", 0))
+            if quantity < 1 or quantity > 32767 or old_quantity + quantity > 32767:
+                await send_json(player.writer, {"type": "error", "code": "clan_item_quantity_limit"})
+                return False
+            unit = max(0, min(unit, 2000000000))
             price = unit * quantity
             if item < 0 or item > 65535 or price > int(clan.get("coin", 0)):
                 await send_json(player.writer, {"type": "error", "code": "clan_fund_low"})
@@ -248,7 +256,7 @@ class ClanInteractionMixin:
                 "item": item, "quantity": 0, "locked": bool(locked),
                 "upgrade": max(0, min(upgrade, 127)), "sys": max(0, min(system, 127)),
                 "expire": expire, "options": clean_text(options, 512)})
-            row["quantity"] = min(32767, int(row.get("quantity", 0)) + quantity)
+            row["quantity"] = int(row.get("quantity", 0)) + quantity
             clan["coin"] = int(clan.get("coin", 0)) - price
             await self.broadcast_clan(room, clan)
         elif kind == "clan_item_send":
@@ -317,23 +325,70 @@ class ClanInteractionMixin:
                 return False
             pets[pet] = state
             await self.broadcast_clan(room, clan)
+        elif kind == "clan_territory_invite":
+            clan = self.clan_for_player(room, player.player_id)
+            role = int(clan.get("members", {}).get(player.player_id, {}).get("role", 0)) if clan else 0
+            territory = self.refresh_clan_territory(clan) if clan else {}
+            if (role < 3 or not territory.get("active") or territory.get("started") or target is None
+                    or target.player_id not in clan.get("members", {})):
+                await send_json(player.writer, {"type": "error", "code": "clan_territory_denied"}); return False
+            guests = territory.setdefault("guests", [])
+            if target.player_id not in guests: guests.append(target.player_id)
+            await send_json(target.writer, {"type": "clan_territory", "category": 3,
+                                            "data": territory.get("id", ""), "name": player.name})
+            await self.broadcast_clan(room, clan)
+        elif kind in ("clan_territory_sync", "clan_territory_close"):
+            clan = self.clan_for_player(room, player.player_id)
+            territory = self.refresh_clan_territory(clan) if clan else {}
+            parts = str(message.get("data", "")).split(",", 2)
+            if (player.player_id != room.owner_id or not parts or parts[0] != territory.get("id")):
+                await send_json(player.writer, {"type": "error", "code": "clan_territory_denied"}); return False
+            if kind == "clan_territory_close":
+                territory["active"] = False
+            elif territory.get("active"):
+                try: started, deadline = int(parts[1]) != 0, int(parts[2])
+                except (ValueError, IndexError): return False
+                now = int(time.time() * 1000)
+                if not now <= deadline <= now + 3600000: return False
+                territory["started"] = bool(territory.get("started")) or started
+                territory["deadline"] = deadline
+            if not territory.get("active"):
+                for member_id, pending in list(room.pending_deliveries.items()):
+                    for delivery, event in list(pending.items()):
+                        if event.get("type") == "clan_territory" and event.get("data") == territory.get("id"):
+                            pending.pop(delivery, None)
+                    if not pending: room.pending_deliveries.pop(member_id, None)
+            await self.broadcast_clan(room, clan)
         elif kind == "clan_territory_open":
             clan = self.clan_for_player(room, player.player_id)
-            if clan is None or clan.get("leader_id") != player.player_id:
-                await send_json(player.writer, {"type": "error", "code": "clan_role_denied"})
-                return False
-            if player.player_id != room.owner_id:
-                await send_json(player.writer, {"type": "error", "code": "owner_world_only"})
-                return False
-            territory = clan.setdefault("territory", {})
-            territory.update({"active": True,
-                              "deadline": int(time.time() * 1000) + 3600000,
-                              "points": int(territory.get("points", 0))})
-            event = {"type": "clan_territory", "seq": room.sequence,
-                     "clan_name": clan.get("name", ""), "payload": dict(territory)}
-            for member_id in clan.get("members", {}):
-                member = room.players.get(member_id)
-                if member is not None: await send_json(member.writer, event)
+            if clan is None:
+                await send_json(player.writer, {"type": "error", "code": "clan_required"}); return False
+            territory = self.refresh_clan_territory(clan)
+            role = int(clan.get("members", {}).get(player.player_id, {}).get("role", 0))
+            now = int(time.time() * 1000)
+            fresh = not territory.get("active")
+            if fresh:
+                if role < 3 or player.player_id != room.owner_id:
+                    await send_json(player.writer, {"type": "error", "code": "clan_role_denied"}); return False
+                if int(territory.get("entries", 0)) <= 0:
+                    await send_json(player.writer, {"type": "error", "code": "clan_territory_no_entries"}); return False
+                territory.update(active=True, started=False, id=secrets.token_hex(12),
+                                 deadline=now + 600000, points=0, members=[], guests=[],
+                                 creator=player.player_id, entries=int(territory.get("entries", 0)) - 1)
+            members = territory.setdefault("members", [])
+            if ((role < 3 and player.player_id not in territory.get("guests", []))
+                    or (territory.get("started") and player.player_id not in members)):
+                await send_json(player.writer, {"type": "error", "code": "clan_territory_denied"}); return False
+            if player.player_id not in members: members.append(player.player_id)
+            delivery = "territory-" + territory["id"] + "-" + player.player_id
+            event = {"type": "clan_territory", "seq": room.sequence, "category": 1,
+                     "clan_name": clan.get("name", ""), "data": territory["id"],
+                     "owner_id": territory.get("creator", ""), "payload": dict(territory),
+                     "delivery_id": delivery}
+            room.pending_deliveries.setdefault(player.player_id, {})[delivery] = event
+            self.save_state(); await self.flush_state()
+            try: await send_json(player.writer, event)
+            except (ConnectionError, OSError): pass
             await self.broadcast_clan(room, clan)
         elif kind == "clan_war_invite":
             own = self.clan_for_player(room, player.player_id)

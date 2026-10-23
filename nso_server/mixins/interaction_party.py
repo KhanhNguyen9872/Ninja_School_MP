@@ -118,13 +118,23 @@ class PartyInteractionMixin:
                     await send_json(player.writer,
                                     {"type": "error", "code": "dungeon_level_mismatch"})
                     return False
-            room.party_dungeons[party_key] = option
-            for member_id in members:
+            now = int(time.time() * 1000)
+            run = next((value for value in room.dungeon_runs.values()
+                        if value.get("owner") == player.player_id and not value.get("finished")
+                        and int(value.get("deadline", 0)) > now), None)
+            if run is None:
+                run = {"id": secrets.token_hex(12), "owner": player.player_id,
+                       "members": list(members), "level": option - 1,
+                       "deadline": now + 3600000, "finished": False}
+                room.dungeon_runs[run["id"]] = run
+            room.party_dungeons[party_key] = int(run["level"]) + 1
+            for member_id in run["members"]:
                 member = room.players.get(member_id)
                 if member is not None:
                     await send_json(member.writer, {"type": "dungeon_admit",
                                                     "seq": room.sequence,
-                                                    "category": option,
+                                                    "category": int(run["level"]) + 1,
+                                                    "data": run["id"],
                                                     "leader_id": player.player_id})
         elif kind == "party_leave":
             for key, members in list(room.parties.items()):

@@ -831,8 +831,11 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(buyer_listing["seller_id"], seller_id)
         await send(buyer_writer, {"cmd": "interaction", "kind": "shinwa_buy",
                                   "target_actor": 0, "data": str(product)})
-        sold_to_seller = await receive(seller_reader)
         sold_to_buyer = await receive(buyer_reader)
+        self.assertNotIn(seller_id, self.state.rooms["SHINWA"].pending_deliveries)
+        await send(buyer_writer, {"cmd": "interaction", "kind": "delivery_ack",
+                                  "target_actor": 0, "data": sold_to_buyer["delivery_id"]})
+        sold_to_seller = await receive(seller_reader)
         self.assertEqual((sold_to_seller["type"], sold_to_buyer["buyer_id"]),
                          ("shinwa_sold", buyer_id))
         self.assertNotIn(product, self.state.rooms["SHINWA"].shinwa)
@@ -928,8 +931,15 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
         await send(guest_writer, {"cmd": "interaction", "kind": "dungeon_finish",
                                   "target_actor": 0, "data": "2,850,4"})
         self.assertEqual((await receive(guest_reader))["code"], "owner_world_only")
+        room = self.state.rooms["CAVE"]
+        owner = room.players[owner_id]; guest = room.players[guest_id]
+        owner.appearance["level"] = guest.appearance["level"] = 55
+        room.parties[owner_id] = [owner_id, guest_id]
+        await send(owner_writer, {"cmd": "interaction", "kind": "dungeon_open", "data": "3"})
+        admitted = await receive(owner_reader); await receive(guest_reader)
+        guest.map_id = 105
         await send(owner_writer, {"cmd": "interaction", "kind": "dungeon_finish",
-                                  "target_actor": 0, "data": "2,850,4"})
+                                  "target_actor": 0, "data": "2,850,4," + admitted["data"]})
         settled = await receive(guest_reader)
         self.assertEqual((settled["type"], settled["category"], settled["amount"],
                           settled["quantity"], settled["owner_id"]),

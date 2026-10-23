@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+import time
 from typing import Any
 
 from ..config import MAX_NAME, clean_text
@@ -148,7 +149,19 @@ class SocialMixin:
         return next((clan for clan in room.clans.values()
                      if player_id in clan.get("members", {})), None)
 
+    @staticmethod
+    def refresh_clan_territory(clan: dict[str, Any]) -> dict[str, Any]:
+        territory = clan.setdefault("territory", {"entries": 1, "use_card": 1})
+        now = int(time.time() * 1000); day = int((time.time() + 7 * 3600) // 86400)
+        previous = territory.setdefault("day", day)
+        if previous != day:
+            territory.update(day=day, entries=1, use_card=1)
+        if territory.get("active") and int(territory.get("deadline", 0)) <= now:
+            territory["active"] = False
+        return territory
+
     def clan_payload(self, room: Room, clan: dict[str, Any]) -> dict[str, Any]:
+        self.refresh_clan_territory(clan)
         rows: list[str] = []
         members = clan.get("members", {})
         for player_id, member in members.items():

@@ -138,9 +138,29 @@ class GameplayInteractionMixin:
                      owner=player.player_id, kicked=kicked_id)
         elif kind == "delivery_ack":
             delivery_id = clean_text(message.get("data"), 128)
+            event = room.pending_deliveries.get(player.player_id, {}).get(delivery_id)
+            seller_event = None
+            # Buyer commits debit+grant durably BEFORE ACK. Transfer the pending
+            # obligation to the seller in one in-memory/persisted state change;
+            # failed/full-bag buyers never release a seller payment.
+            if (event is not None and event.get("type") == "shinwa_sold"
+                    and event.get("buyer_id") == player.player_id):
+                seller_id = str(event.get("seller_id", ""))
+                if seller_id and seller_id != player.player_id:
+                    seller_delivery = str(event.get("transaction", "")) + "-seller"
+                    seller_event = dict(event, delivery_id=seller_delivery)
+                    room.pending_deliveries.setdefault(seller_id, {})[seller_delivery] = seller_event
             if not self.acknowledge_delivery(room, player.player_id, delivery_id):
                 await send_json(player.writer, {"type": "error", "code": "delivery_not_found"})
                 return False
+            if seller_event is not None:
+                await self.flush_state()
+                seller = room.players.get(str(seller_event.get("seller_id", "")))
+                if seller is not None:
+                    try:
+                        await send_json(seller.writer, seller_event)
+                    except (ConnectionError, OSError):
+                        pass  # obligation remains durable for seller reconnect
         elif kind == "friend_invite":
             if room.friend_requests.get(player.player_id) == target.player_id:
                 room.friend_requests.pop(player.player_id, None)
@@ -172,6 +192,12 @@ class GameplayInteractionMixin:
                     or expires_at <= int(time.time() * 1000):
                 await send_json(player.writer, {"type": "error", "code": "shinwa_invalid"})
                 return False
+            if any(event.get("type") == "shinwa_sold"
+                   and event.get("seller_id") == player.player_id
+                   and str(event.get("data", "")).split(",", 1)[0] == str(slot)
+                   for pending in room.pending_deliveries.values() for event in pending.values()):
+                await send_json(player.writer, {"type": "error", "code": "shinwa_settling"})
+                return False
             old_id = next((product for product, listing in room.shinwa.items()
                            if listing.get("seller_id") == player.player_id
                            and int(listing.get("slot", -1)) == slot), 0)
@@ -188,6 +214,16 @@ class GameplayInteractionMixin:
         elif kind == "shinwa_buy":
             try: product = int(str(message.get("data", "0")))
             except ValueError: product = 0
+            pending = next((event for event in room.pending_deliveries.get(player.player_id, {}).values()
+                            if event.get("type") == "shinwa_sold"
+                            and event.get("buyer_id") == player.player_id), None)
+            if pending is not None:
+                # The same product is a retry, not a new sale. A buyer cannot
+                # accumulate mutually unaffordable/incompatible reservations.
+                await send_json(player.writer, dict(pending))
+                if int(pending.get("item_id", 0)) != product:
+                    await send_json(player.writer, {"type": "error", "code": "shinwa_pending"})
+                return True
             listing = room.shinwa.get(product)
             if listing is None or int(listing.get("expires_at", 0)) <= int(time.time() * 1000):
                 room.shinwa.pop(product, None)
@@ -202,14 +238,49 @@ class GameplayInteractionMixin:
                     "transaction": transaction, "buyer_id": player.player_id,
                     "buyer_name": player.name, **listing}
             seller_id = str(listing.get("seller_id", ""))
+            # Publish the obligation before any socket await; a disconnect
+            # cannot pop the listing without leaving a replayable delivery.
+            delivery_id = transaction + "-buyer"
+            buyer_event = dict(sold, delivery_id=delivery_id)
+            room.pending_deliveries.setdefault(player.player_id, {})[delivery_id] = buyer_event
+            self.save_state()
+            await self.flush_state()
             await self.broadcast_except(
                 room, {"type": "shinwa_removed", "seq": room.sequence,
                        "item_id": product, "seller_id": seller_id},
                 {player.player_id, seller_id})
-            await self.durable_delivery(room, player.player_id, sold,
-                                        transaction + "-buyer")
-            await self.durable_delivery(room, seller_id, sold,
-                                        transaction + "-seller")
+            await send_json(player.writer, buyer_event)
+            # Seller receives the sale only from delivery_ack after local apply.
+        elif kind == "shinwa_reclaim":
+            raw = clean_text(message.get("data"), 4096)
+            fields = raw.split(",", 7)
+            try:
+                slot, template, quantity, expires = int(fields[0]), int(fields[1]), int(fields[2]), int(fields[6])
+            except (ValueError, IndexError):
+                await send_json(player.writer, {"type": "error", "code": "shinwa_invalid"}); return False
+            if not 0 <= slot < 10 or template < 0 or quantity < 1 or expires > int(time.time() * 1000):
+                await send_json(player.writer, {"type": "error", "code": "shinwa_invalid"}); return False
+            pending = room.pending_deliveries.get(player.player_id, {})
+            retry = next((event for event in pending.values() if event.get("type") == "shinwa_removed"
+                          and event.get("category") == 1 and event.get("data") == raw), None)
+            if retry is not None:
+                await send_json(player.writer, retry); return True
+            if any(event.get("type") == "shinwa_sold" and event.get("seller_id") == player.player_id
+                   and str(event.get("data", "")).split(",", 1)[0] == str(slot)
+                   for obligations in room.pending_deliveries.values() for event in obligations.values()):
+                await send_json(player.writer, {"type": "error", "code": "shinwa_settling"}); return False
+            product = next((key for key, row in room.shinwa.items() if row.get("seller_id") == player.player_id
+                            and int(row.get("slot", -1)) == slot), 0)
+            if product and room.shinwa[product].get("data") != raw:
+                await send_json(player.writer, {"type": "error", "code": "shinwa_invalid"}); return False
+            if product: room.shinwa.pop(product, None)
+            delivery = "reclaim-" + secrets.token_hex(12)
+            event = {"type": "shinwa_removed", "seq": room.sequence, "item_id": product,
+                     "seller_id": player.player_id, "category": 1, "data": raw, "delivery_id": delivery}
+            room.pending_deliveries.setdefault(player.player_id, {})[delivery] = event
+            self.save_state(); await self.flush_state()
+            try: await send_json(player.writer, event)
+            except (ConnectionError, OSError): pass
         elif kind == "shinwa_remove":
             try: product = int(str(message.get("data", "0")))
             except ValueError: product = 0
@@ -293,19 +364,36 @@ class GameplayInteractionMixin:
             if player.player_id != room.owner_id:
                 await send_json(player.writer, {"type": "error", "code": "owner_world_only"})
                 return False
-            parts = str(message.get("data", "")).split(",", 2)
-            try:
-                level, points, reward = int(parts[0]), int(parts[1]), int(parts[2])
+            parts = str(message.get("data", "")).split(",", 3)
+            try: level, points, reward = int(parts[0]), int(parts[1]), int(parts[2])
             except (ValueError, IndexError):
-                await send_json(player.writer, {"type": "error", "code": "dungeon_result_invalid"})
-                return False
-            if level < 0 or level > 5 or points < 0 or reward < 0:
-                await send_json(player.writer, {"type": "error", "code": "dungeon_result_invalid"})
-                return False
-            await self.broadcast(room, {"type": "dungeon_finish", "seq": room.sequence,
-                                         "category": level, "amount": points,
-                                         "quantity": reward, "owner_id": room.owner_id},
-                                 player.player_id)
+                await send_json(player.writer, {"type": "error", "code": "dungeon_result_invalid"}); return False
+            run_id = parts[3] if len(parts) > 3 else ""
+            run = room.dungeon_runs.get(run_id)
+            if run is None and not run_id:
+                run = next((v for v in room.dungeon_runs.values() if v.get("owner") == player.player_id
+                            and v.get("level") == level and not v.get("finished")), None)
+            if (run is None or run.get("owner") != player.player_id or run.get("level") != level
+                    or not 0 <= points <= 32767 or not 0 <= reward <= 32767):
+                await send_json(player.writer, {"type": "error", "code": "dungeon_result_invalid"}); return False
+            maps = ({91,92,93}, {94,95,96,97}, {105,106,107,108,109},
+                    {114,115,116}, {125,126,127,128}, {157,158,159})
+            deliveries = []
+            if not run.get("finished"):
+                run["finished"] = True
+                for member_id in run["members"]:
+                    member = room.players.get(member_id)
+                    if member is None or member_id == player.player_id or member.map_id not in maps[level]: continue
+                    delivery = "dungeon-" + run["id"] + "-" + member_id
+                    event = {"type": "dungeon_finish", "seq": room.sequence, "category": level,
+                             "amount": points, "quantity": reward, "owner_id": room.owner_id,
+                             "data": run["id"], "delivery_id": delivery}
+                    room.pending_deliveries.setdefault(member_id, {})[delivery] = event
+                    deliveries.append((member, event))
+                self.save_state(); await self.flush_state()
+            for member, event in deliveries:
+                try: await send_json(member.writer, event)
+                except (ConnectionError, OSError): pass
         elif kind == "rank_report":
             raw = str(message.get("data", ""))
             split = raw.find(",")
