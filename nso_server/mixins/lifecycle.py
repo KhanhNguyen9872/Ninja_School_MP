@@ -195,7 +195,7 @@ class LifecycleMixin:
         await self.broadcast(room, {"type": "player_join", "player_id": player.player_id,
                                      "actor_id": player.actor_id, "name": player.name,
                                      "map": player.map_id, "zone": player.zone_id,
-                                     "appearance": dict(player.appearance)}, player.player_id)
+                                     "appearance": self.projected_appearance(player.appearance)}, player.player_id)
         self.save_state()
         self.log("room_joined", room=room.room_id, player_id=player.player_id,
                  name=player.name, players=len(room.players), map=player.map_id)

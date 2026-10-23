@@ -181,6 +181,54 @@ class ClanInteractionMixin:
                                             "name": player.name, "clan_name": "",
                                             "relation_type": -1})
             await self.broadcast_clan(room, clan)
+        elif kind == "clan_black_saturday_claim":
+            clan = self.clan_for_player(room, player.player_id)
+            if clan is None:
+                await send_json(player.writer, {"type": "error", "code": "clan_required"}); return False
+            member = clan.get("members", {}).get(player.player_id, {})
+            if clan.get("leader_id") != player.player_id or int(member.get("role", 0)) != 4:
+                await send_json(player.writer, {"type": "error", "code": "clan_role_denied"}); return False
+            parts = str(message.get("data", "")).split(",")
+            try: week, rank = (int(parts[0]), int(parts[1])) if len(parts) == 2 else (0, 0)
+            except (ValueError, TypeError): week, rank = 0, 0
+            local_day = int((time.time() + 7 * 3600) // 86400)
+            latest_week = local_day - ((local_day - 2) % 7)
+            minute = int((time.time() + 7 * 3600) // 60) % 1440
+            if local_day == latest_week and minute < 22 * 60 + 30: latest_week -= 7
+            if week <= 0 or (week - 2) % 7 or week > latest_week or not 1 <= rank <= 10:
+                await send_json(player.writer, {"type": "error", "code": "black_saturday_claim_invalid"}); return False
+            # The offline event board remains the intentional owner-derived
+            # adapter. Only the settled rank is supplied; never trust a payout
+            # amount. Identity/dedupe belong to this actual clan and week,
+            # not to the claimant, request ID, clan display alias or leader.
+            awards = clan.setdefault("black_saturday_rewards", {})
+            award = awards.get(str(week))
+            if award is not None and int(award.get("rank", 0)) != rank:
+                await send_json(player.writer, {"type": "error", "code": "black_saturday_claim_invalid"}); return False
+            if award is None:
+                amount = {1: 100000000, 2: 70000000, 3: 50000000}.get(rank, 20000000)
+                if int(clan.get("coin", 0)) + amount > 2000000000:
+                    await send_json(player.writer, {"type": "error", "code": "black_saturday_fund_limit"}); return False
+                award = {"rank": rank, "amount": amount, "claims": {}}
+                awards[str(week)] = award
+                clan["coin"] = int(clan.get("coin", 0)) + amount
+            decisions = award.setdefault("claims", {})
+            decision = decisions.get(player.player_id)
+            if decision is None:
+                decision = {"type": "activity_state", "phase": "black_saturday_claim",
+                            "category": 1, "amount": int(award["amount"]),
+                            "data": str(week) + "," + str(rank),
+                            "player_id": player.player_id, "clan_name": str(clan.get("name", "")),
+                            "room": room.room_id, "owner_id": room.owner_id,
+                            "delivery_id": "black-saturday-" + secrets.token_hex(12)}
+                decisions[player.player_id] = decision
+            # Stage coin, the clan/week award and its decision together before
+            # the first await; failed sockets leave a durable obligation.
+            room.pending_deliveries.setdefault(player.player_id, {})[decision["delivery_id"]] = dict(decision)
+            self.save_state(); await self.flush_state()
+            try: await send_json(player.writer, dict(decision))
+            except (ConnectionError, OSError): pass
+            await self.broadcast_clan(room, clan)
         elif kind == "clan_contribute" and "," in str(message.get("data", "")):
             raw = str(message.get("data", "")); tx, value = raw.split(",", 1)
             try: amount = int(value)

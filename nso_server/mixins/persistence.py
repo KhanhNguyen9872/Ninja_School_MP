@@ -130,13 +130,27 @@ class PersistenceMixin:
                 self._save_executor, self._write_state, data)
 
     @staticmethod
+    def projected_appearance(appearance: dict[str, Any]) -> dict[str, Any]:
+        result = dict(appearance)
+        source = appearance.get("combat", {})
+        if isinstance(source, dict) and source.get("v") == 1:
+            combat = dict(source)
+            now = int(time.monotonic() * 1000)
+            elapsed = max(0, now - int(source.get("_at", now)))
+            for key in ("locked_ms", "miss_ms", "burn_ms", "stealth_ms", "invisible_ms", "reduction_ms"):
+                combat[key] = max(0, int(source.get(key, 0)) - elapsed)
+            combat["_at"] = now
+            result["combat"] = combat
+        return result
+
+    @staticmethod
     def player_snapshot(player: Player) -> dict[str, Any]:
         return {"player_id": player.player_id, "name": player.name, "map": player.map_id,
                 "zone": player.zone_id,
                 "x": player.x, "y": player.y, "hp": player.hp,
                 "actor_id": getattr(player, "actor_id",
                                     PersistenceMixin.actor_id_for(player.player_id)),
-                "appearance": dict(getattr(player, "appearance", {})),
+                "appearance": PersistenceMixin.projected_appearance(getattr(player, "appearance", {})),
                 "clone": dict(getattr(player, "clone", {})),
                 "cheat_enabled": bool(getattr(player, "cheat_enabled", False))}
 

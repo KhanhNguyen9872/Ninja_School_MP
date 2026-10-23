@@ -25,11 +25,19 @@ class GameplayInteractionMixin:
             try:
                 mob_id = clean_text(parts[0], 32)
                 mob_x, mob_y = int(parts[1]), int(parts[2])
+                if len(parts) not in (3, 4) or (len(parts) == 4 and parts[3] not in ("0", "1")):
+                    raise ValueError("mob boss flag")
+                boss = len(parts) == 4 and parts[3] == "1"
             except (IndexError, ValueError):
                 await send_json(player.writer, {"type": "error", "code": "mob_attack_invalid"})
                 return False
-            if abs(target.x - mob_x) > 300 or abs(target.y - mob_y) > 180:
+            limit = 601 if boss else 301  # source getDistance truncates to int
+            dx, dy = target.x - mob_x, target.y - mob_y
+            if dx * dx + dy * dy >= limit * limit:
                 await send_json(player.writer, {"type": "error", "code": "mob_attack_range"})
+                return False
+            if self.combat_effect(target, "invisible_ms"):
+                await send_json(player.writer, {"type": "error", "code": "mob_target_invisible"})
                 return False
             raw = max(0, min(int(message.get("damage", 0)), 2000000000))
             reduction = max(0, int(target.appearance.get("damage_down", 0)))

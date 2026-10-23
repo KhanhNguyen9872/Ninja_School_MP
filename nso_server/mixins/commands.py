@@ -220,7 +220,7 @@ class CommandsMixin:
             await self.broadcast(room, {"type": "player_appearance", "seq": room.sequence,
                                          "player_id": player.player_id,
                                          "actor_id": player.actor_id,
-                                         "appearance": dict(appearance)}, player.player_id)
+                                         "appearance": self.projected_appearance(appearance)}, player.player_id)
             self.save_state()
             self.log("player_appearance", room=room.room_id, player_id=player.player_id,
                      actor_id=player.actor_id, name=player.name,
