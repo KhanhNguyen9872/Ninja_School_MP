@@ -28,10 +28,10 @@ class CombatInteractionMixin:
             if not linked:
                 await send_json(player.writer, {"type": "error", "code": "cuu_sat_not_open"})
                 return False
-            damage = await self.validate_pvp_attack(player, target)
-            if damage <= 0:
-                return False
             skill = max(0, min(int(message.get("skill", 0)), 127))
+            damage = await self.validate_pvp_attack(player, target, skill, False)
+            if damage < 0:
+                return False
             target.hp = max(0, target.hp - damage)
             await self.broadcast_map(room, player.map_id,
                                      {"type": "pvp_hit", "seq": room.sequence,
@@ -39,7 +39,8 @@ class CombatInteractionMixin:
                                       "attacker_actor_id": player.actor_id,
                                       "target_id": target.player_id,
                                       "target_actor_id": target.actor_id,
-                                      "skill": skill, "damage": damage,
+                                      "skill": skill,
+                                      "damage": -damage if player.last_pvp_fatal else damage,
                                       "hp": target.hp,
                                       # NSO_FINAL records the fatal attacker in
                                       # the victim's enemies and awards +2 PK
@@ -134,6 +135,7 @@ class CombatInteractionMixin:
                 return False
             player.last_revive_at = now
             target.hp = max(1, int(target.appearance.get("max_hp", 1)))
+            target.revive_protected_until = now + 5.0
             target.last_state = None
             await self.broadcast_map(room, player.map_id,
                                      {"type": "player_revived", "seq": room.sequence,

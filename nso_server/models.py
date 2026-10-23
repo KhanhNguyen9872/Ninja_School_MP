@@ -28,6 +28,9 @@ class Player:
     last_seen: float = field(default_factory=time.monotonic)
     last_state: tuple[int, int, int, int, int] | None = None
     last_revive_at: float = 0.0
+    revive_protected_until: float = 0.0
+    pvp_ready_at: dict[int, float] = field(default_factory=dict)
+    last_pvp_fatal: bool = False
 
 @dataclass
 class Room:
@@ -58,6 +61,7 @@ class Room:
     chan_le_bets: dict[str, dict[str, int]] = field(default_factory=dict)
     rankings: dict[str, dict[str, int]] = field(default_factory=dict)
     pending_deliveries: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
+    clan_contributions: dict[str, dict[str, Any]] = field(default_factory=dict)
     clans: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def ensure_world(self) -> None:

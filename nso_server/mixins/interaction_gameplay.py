@@ -36,7 +36,9 @@ class GameplayInteractionMixin:
             system = max(0, min(int(message.get("skill", 0)), 3))
             resistance = int(target.appearance.get(
                 "res_fire" if system == 1 else "res_ice" if system == 2 else "res_wind", 0))
-            shown = max(1, raw - reduction - max(0, resistance)) if raw > 0 else 0
+            protected = target.revive_protected_until > time.monotonic() \
+                or self.combat_effect(target, "miss_ms")
+            shown = -1 if protected else max(1, raw - reduction - max(0, resistance)) if raw > 0 else 0
             drained = max(1, shown - shown * 80 // 100) if shown > 0 else 0
             target.hp = max(0, target.hp - drained)
             await self.broadcast(room, dict(base, type="mob_hit", mob_id=mob_id,
@@ -137,7 +139,8 @@ class GameplayInteractionMixin:
             self.log("room_player_kicked", room=room.room_id,
                      owner=player.player_id, kicked=kicked_id)
         elif kind == "delivery_ack":
-            delivery_id = clean_text(message.get("data"), 128)
+            raw_ack = clean_text(message.get("data"), 340)
+            delivery_id, separator, receipt = raw_ack.partition("|")
             event = room.pending_deliveries.get(player.player_id, {}).get(delivery_id)
             seller_event = None
             # Buyer commits debit+grant durably BEFORE ACK. Transfer the pending
@@ -150,9 +153,32 @@ class GameplayInteractionMixin:
                     seller_delivery = str(event.get("transaction", "")) + "-seller"
                     seller_event = dict(event, delivery_id=seller_delivery)
                     room.pending_deliveries.setdefault(seller_id, {})[seller_delivery] = seller_event
-            if not self.acknowledge_delivery(room, player.player_id, delivery_id):
-                await send_json(player.writer, {"type": "error", "code": "delivery_not_found"})
-                return False
+            # Activity points are committed on the first real pending ACK only,
+            # alongside removing that obligation; failed/replayed ACK cannot add twice.
+            changed_clan = None
+            if event is not None and event.get("type") == "activity_reward":
+                reward = str(event.get("data", "")).partition("|")[2]
+                points = 0
+                for row in reward.split(";"):
+                    if row.startswith("p,"):
+                        try: points += max(0, min(int(row[2:]), 2147483647))
+                        except ValueError: pass
+                changed_clan = self.clan_for_player(room, player.player_id) if points else None
+                if changed_clan is not None:
+                    member = changed_clan.get("members", {}).get(player.player_id)
+                    if member is not None:
+                        member["points"] = min(2147483647, int(member.get("points", 0)) + points)
+                        changed_clan["exp"] = min(2147483647, int(changed_clan.get("exp", 0)) + points)
+            removed = self.acknowledge_delivery(room, player.player_id, delivery_id)
+            if not removed and not separator:
+                await send_json(player.writer, {"type": "error", "code": "delivery_not_found"}); return False
+            if separator and receipt:
+                # Absent means no obligation remains in this room. Idempotent
+                # confirmation lets a client retry a confirmation lost in transit.
+                self.save_state(); await self.flush_state()
+                await send_json(player.writer, {"type": "activity_state", "phase": "receipt_ack",
+                                                "delivery_id": delivery_id, "data": receipt})
+            if changed_clan is not None: await self.broadcast_clan(room, changed_clan)
             if seller_event is not None:
                 await self.flush_state()
                 seller = room.players.get(str(seller_event.get("seller_id", "")))

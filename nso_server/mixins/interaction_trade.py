@@ -132,10 +132,10 @@ class TradeInteractionMixin:
             if room.duels.get(player.player_id) != target.player_id:
                 await send_json(player.writer, {"type": "error", "code": "duel_not_open"})
                 return False
-            damage = await self.validate_pvp_attack(player, target)
-            if damage <= 0:
-                return False
             skill = max(0, min(int(message.get("skill", 0)), 127))
+            damage = await self.validate_pvp_attack(player, target, skill, True)
+            if damage < 0:
+                return False
             target.hp = max(0, target.hp - damage)
             await self.broadcast_map(room, player.map_id,
                                      {"type": "duel_hit", "seq": room.sequence,
@@ -143,7 +143,8 @@ class TradeInteractionMixin:
                                       "attacker_actor_id": player.actor_id,
                                       "target_id": target.player_id,
                                       "target_actor_id": target.actor_id,
-                                      "skill": skill, "damage": damage,
+                                      "skill": skill,
+                                      "damage": -damage if player.last_pvp_fatal else damage,
                                       "hp": target.hp}, player.zone_id)
             if target.hp == 0:
                 await self.send_pair(player, target,

@@ -181,6 +181,29 @@ class ClanInteractionMixin:
                                             "name": player.name, "clan_name": "",
                                             "relation_type": -1})
             await self.broadcast_clan(room, clan)
+        elif kind == "clan_contribute" and "," in str(message.get("data", "")):
+            raw = str(message.get("data", "")); tx, value = raw.split(",", 1)
+            try: amount = int(value)
+            except ValueError: amount = 0
+            if (not tx.startswith("cc-") or len(tx) > 120 or any(c in tx for c in "|\n\r")
+                    or not 1000 <= amount <= 100000000):
+                await send_json(player.writer, {"type": "error", "code": "clan_amount_invalid"}); return False
+            decision = room.clan_contributions.get(tx)
+            if decision is not None and (decision.get("player_id") != player.player_id or decision.get("amount") != amount):
+                await send_json(player.writer, {"type": "error", "code": "clan_amount_invalid"}); return False
+            clan = self.clan_for_player(room, player.player_id)
+            if decision is None:
+                accepted = clan is not None and int(clan.get("coin", 0)) + amount <= 2000000000
+                decision = {"type": "activity_state", "phase": "clan_contribution", "data": tx,
+                            "amount": amount, "category": int(accepted), "player_id": player.player_id,
+                            "delivery_id": "contribution-" + secrets.token_hex(12)}
+                room.clan_contributions[tx] = decision
+                if accepted: clan["coin"] = int(clan.get("coin", 0)) + amount
+                room.pending_deliveries.setdefault(player.player_id, {})[decision["delivery_id"]] = dict(decision)
+                self.save_state(); await self.flush_state()
+            try: await send_json(player.writer, dict(decision))
+            except (ConnectionError, OSError): pass
+            if clan is not None: await self.broadcast_clan(room, clan)
         elif kind in ("clan_contribute", "clan_points"):
             clan = self.clan_for_player(room, player.player_id)
             if clan is None:
@@ -192,7 +215,9 @@ class ClanInteractionMixin:
                 await send_json(player.writer, {"type": "error", "code": "clan_amount_invalid"})
                 return False
             if kind == "clan_contribute":
-                clan["coin"] = min(2147483647, int(clan.get("coin", 0)) + amount)
+                if int(clan.get("coin", 0)) + amount > 2000000000:
+                    await send_json(player.writer, {"type": "error", "code": "clan_fund_limit"}); return False
+                clan["coin"] = int(clan.get("coin", 0)) + amount
             else:
                 clan["exp"] = min(2147483647, int(clan.get("exp", 0)) + amount)
                 member = clan.get("members", {}).get(player.player_id, {})

@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
@@ -502,8 +503,12 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
         room = self.state.rooms["RELATIONS"]
         a_actor = room.players[a_id].actor_id; b_actor = room.players[b_id].actor_id
         room.players[a_id].hp = 100; room.players[b_id].hp = 100
-        room.players[a_id].appearance = {"damage": 35}
-        room.players[b_id].appearance = {"damage_down": 0}
+        # Source-scaled deterministic fixture: 599 * 6 / 100 == 35.
+        room.players[a_id].map_id = room.players[b_id].map_id = 2
+        room.players[a_id].appearance = {"damage": 599, "class_id": 1, "level": 100,
+            "weapon": 12, "mp": 100, "combat": {"v": 1, "damage2": 599,
+            "skill": 1, "attack_type": 1, "dx": 51, "dy": 18, "mana": 1, "cooldown": 500}}
+        room.players[b_id].appearance = {"damage_down": 0, "level": 100}
 
         await send(a_writer, {"cmd": "interaction", "kind": "friend_invite",
                               "target_actor": b_actor})
@@ -535,9 +540,10 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await receive(a_reader))["type"], "cuu_sat_start")
         self.assertEqual((await receive(b_reader))["type"], "cuu_sat_start")
         room.players[b_id].hp = 100
-        await send(a_writer, {"cmd": "interaction", "kind": "pvp_attack",
-                              "target_actor": b_actor, "damage": 35, "skill": 4})
-        nonfatal = await receive(a_reader)
+        with patch("nso_server.mixins.combat.secrets.randbelow", return_value=0):
+            await send(a_writer, {"cmd": "interaction", "kind": "pvp_attack",
+                                  "target_actor": b_actor, "damage": 35, "skill": 1})
+            nonfatal = await receive(a_reader)
         self.assertEqual((nonfatal["hp"], nonfatal["attacker"], nonfatal["amount"]),
                          (65, "Alpha", 0))
         self.assertEqual((await receive(b_reader))["type"], "pvp_hit")
@@ -1030,8 +1036,12 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
         await b_writer.drain(); await receive(b_reader); await receive(a_reader)
         a_actor = self.state.players[a_id].actor_id
         b_actor = self.state.players[b_id].actor_id
-        self.state.players[a_id].appearance = {"damage": 60}
-        self.state.players[b_id].appearance = {"damage_down": 0, "max_hp": 50}
+        # This relay test needs a fatal hit, not the old unscaled damage.
+        self.state.players[a_id].appearance = {"damage": 1000, "class_id": 1,
+            "level": 100, "weapon": 12, "mp": 100, "combat": {"v": 1,
+            "damage2": 1000, "skill": 7, "attack_type": 1, "dx": 51,
+            "dy": 18, "mana": 1, "cooldown": 500}}
+        self.state.players[b_id].appearance = {"damage_down": 0, "max_hp": 50, "level": 100}
         await send(a_writer, '{"cmd":"state","map":22,"x":100,"y":200,"hp":100}')
         await a_writer.drain(); await receive(b_reader)
         await send(b_writer, '{"cmd":"state","map":22,"x":120,"y":200,"hp":50}')
@@ -1104,10 +1114,11 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
         await b_writer.drain()
         self.assertEqual((await receive(b_reader))["type"], "duel_start")
         self.assertEqual((await receive(a_reader))["type"], "duel_start")
-        await send(a_writer, {"cmd": "interaction", "kind": "duel_attack",
-                                    "target_actor": b_actor, "damage": 60, "skill": 7})
-        await a_writer.drain()
-        self.assertEqual((await receive(a_reader))["type"], "duel_hit")
+        with patch("nso_server.mixins.combat.secrets.randbelow", return_value=0):
+            await send(a_writer, {"cmd": "interaction", "kind": "duel_attack",
+                                        "target_actor": b_actor, "damage": 60, "skill": 7})
+            await a_writer.drain()
+            self.assertEqual((await receive(a_reader))["type"], "duel_hit")
         self.assertEqual((await receive(b_reader))["type"], "duel_hit")
         self.assertEqual((await receive(a_reader))["type"], "duel_end")
         self.assertEqual((await receive(b_reader))["type"], "duel_end")
@@ -1601,10 +1612,13 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
         appearances = (
             (fan_writer, (target_reader, watch_reader),
              {"cmd": "appearance", "name": "Fan", "class_id": 6,
-              "max_hp": 100, "max_mp": 80, "damage": 200}),
+              "max_hp": 100, "max_mp": 80, "mp": 80, "damage": 1000,
+              "level": 100, "weapon": 17,
+              "combat": {"v": 1, "damage2": 1000, "skill": 46,
+                         "attack_type": 1, "dx": 56, "dy": 29, "mana": 1, "cooldown": 750}}),
             (target_writer, (fan_reader, watch_reader),
              {"cmd": "appearance", "name": "Target", "class_id": 1,
-              "max_hp": 120, "max_mp": 90}),
+              "max_hp": 120, "max_mp": 90, "level": 100}),
             (watch_writer, (fan_reader, target_reader),
              {"cmd": "appearance", "name": "Watcher", "class_id": 2,
               "max_hp": 100, "max_mp": 70}),
@@ -1618,7 +1632,7 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
                   (target_writer, (fan_reader, watch_reader), 20, 40),
                   (watch_writer, (fan_reader, target_reader), 30, 100))
         for writer, readers, x, hp in states:
-            await send(writer, {"cmd": "state", "map": 22, "x": x, "y": 10, "hp": hp})
+            await send(writer, {"cmd": "state", "map": 2, "x": x, "y": 10, "hp": hp})
             for reader in readers:
                 self.assertEqual((await receive(reader))["type"], "player_state")
 
@@ -1627,13 +1641,14 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
                                 "target_actor": room.players[target_id].actor_id})
         self.assertEqual((await receive(fan_reader))["type"], "cuu_sat_start")
         self.assertEqual((await receive(target_reader))["type"], "cuu_sat_start")
-        await send(fan_writer, {"cmd": "interaction", "kind": "pvp_attack",
-                                "target_actor": room.players[target_id].actor_id,
-                                "skill": 46})
-        for reader in (fan_reader, target_reader, watch_reader):
-            exhausted = await receive(reader)
-            self.assertEqual((exhausted["type"], exhausted["hp"]), ("pvp_hit", 0))
-            self.assertEqual((exhausted["attacker"], exhausted["amount"]), ("Fan", 2))
+        with patch("nso_server.mixins.combat.secrets.randbelow", return_value=0):
+            await send(fan_writer, {"cmd": "interaction", "kind": "pvp_attack",
+                                    "target_actor": room.players[target_id].actor_id,
+                                    "skill": 46})
+            for reader in (fan_reader, target_reader, watch_reader):
+                exhausted = await receive(reader)
+                self.assertEqual((exhausted["type"], exhausted["hp"]), ("pvp_hit", 0))
+                self.assertEqual((exhausted["attacker"], exhausted["amount"]), ("Fan", 2))
         self.assertEqual((await receive(fan_reader))["type"], "cuu_sat_end")
         self.assertEqual((await receive(target_reader))["type"], "cuu_sat_end")
         self.assertEqual(room.players[target_id].hp, 0)

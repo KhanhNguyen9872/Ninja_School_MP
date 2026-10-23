@@ -74,7 +74,8 @@ class PersistenceMixin:
                                "chan_le_bets": room.chan_le_bets,
                                "rankings": room.rankings,
                                "clans": room.clans,
-                               "pending_deliveries": room.pending_deliveries}
+                               "pending_deliveries": room.pending_deliveries,
+                               "clan_contributions": room.clan_contributions}
         return {"version": 4, "saved_at": int(time.time()), "rooms": rooms,
                 "worlds": worlds}
 
@@ -207,6 +208,30 @@ class PersistenceMixin:
             except (TypeError, ValueError):
                 value = default
             return max(minimum, min(value, maximum))
+        source = message.get("combat")
+        combat: dict[str, Any] = {}
+        if isinstance(source, dict) and source.get("v") == 1:
+            def combat_number(key: str, default: int = 0, maximum: int = 2000000000,
+                              minimum: int = 0) -> int:
+                try:
+                    value = int(source.get(key, default))
+                except (TypeError, ValueError):
+                    value = default
+                return max(minimum, min(value, maximum))
+            combat = {key: combat_number(key) for key in (
+                "damage2", "fatal_damage", "fatal_percent", "support_fatal", "stealth_fatal",
+                "atk_fire", "atk_ice", "atk_wind", "atk_pct54", "atk_pct55", "atk_pct56",
+                "res_fire_pct", "res_ice_pct", "res_wind_pct", "res_fire_flat",
+                "res_ice_flat", "res_wind_flat", "flat113", "flat103", "pvp_reduce",
+                "fatal_reduce", "fatal_resist", "reduction_percent", "pet_dame_down")}
+            combat.update({key: combat_number(key, maximum=600000) for key in (
+                "locked_ms", "miss_ms", "burn_ms", "stealth_ms", "invisible_ms", "reduction_ms")})
+            combat.update(v=1, skill=combat_number("skill", -1, 127, -1),
+                          attack_type=combat_number("attack_type", maximum=4),
+                          dx=combat_number("dx", maximum=2000), dy=combat_number("dy", maximum=2000),
+                          mana=combat_number("mana", maximum=65535),
+                          cooldown=combat_number("cooldown", maximum=3600000),
+                          free_mana=combat_number("free_mana", maximum=1), _at=int(time.monotonic() * 1000))
         return {"name": clean_text(message.get("name"), MAX_NAME),
                 "class_id": number("class_id", 0, 0, 6),
                 "gender": number("gender", 0, 0, 1),
@@ -214,7 +239,8 @@ class PersistenceMixin:
                 "weapon": number("weapon", -1, -1, 32767),
                 "body": number("body", 0, -1, 32767),
                 "leg": number("leg", 0, -1, 32767),
-                "level": number("level", 1, 1, 160),
+                "level": number("level", 1, 1, 200),
+                "combat": combat,
                 "max_hp": number("max_hp", 1, 1, 2000000000),
                 "fashion": self.clean_int_list(message.get("fashion"), 10, -1, 32767),
                 "mount_ids": self.clean_int_list(message.get("mount_ids"), 5, -1, 32767),
