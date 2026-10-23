@@ -60,8 +60,9 @@ class Room:
     clans: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def ensure_world(self) -> None:
-        if not self.mobs:
-            self.mobs["1:0:mob-1"] = {"mob_id": "mob-1", "template": 1, "map": 1,
-                                   "zone": 0,
-                                   "x": 120, "y": 120, "hp": 100, "max_hp": 100,
-                                   "alive": True}
+        """Rooms start with no server mob rows.
+
+        Clients project their own map spawns; the old synthetic mob-1 row was
+        replayed through room_joined/snapshot and revived a real map-1 mob slot.
+        """
+        pass

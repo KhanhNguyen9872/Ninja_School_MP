@@ -387,7 +387,10 @@ class CommandsMixin:
                     "zone": zone_id,
                     "x": int(message.get("x", player.x)),
                     "y": int(message.get("y", player.y)), "owner": drop_owner,
-                    "quantity": max(1, min(int(message.get("quantity", 1)), 32767)),
+                    # Yen is credited as a signed-int wallet amount, not an
+                    # inventory stack. Keep ordinary item quantities bounded.
+                    "quantity": max(1, min(int(message.get("quantity", 1)),
+                                           2147483647 if template == 12 else 32767)),
                     "item_type": max(-1, min(int(message.get("item_type", -1)), 255)),
                     "locked": bool(message.get("locked", False)),
                     "upgrade": max(0, min(int(message.get("upgrade", 0)), 255)),
