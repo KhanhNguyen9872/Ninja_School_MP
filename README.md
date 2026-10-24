@@ -11,6 +11,7 @@ trên thiết bị bằng RMS.
 - Hỗ trợ chat, tổ đội, giao dịch, tỷ thí, gia tộc và hoạt động chung.
 - State phòng chỉ sống khi còn chủ (hoặc chủ mới sau host migration). Khởi động lại process vẫn bỏ phòng cũ.
 - Nên chạy sau reverse proxy/tunnel nếu cần TLS; protocol game không nhúng TLS.
+- Sau reverse proxy/Docker/tunnel mọi người chơi có cùng một IP nguồn: tăng `NSO_MAX_CONNECTIONS_PER_IP` (mặc định 16) và `NSO_PASSWORD_FAIL_LIMIT` (mặc định 5) bằng biến môi trường.
 - Hỗ trợ TCP và UDP trên cùng cổng; phía game mặc định dùng TCP.
 - Giao thức nhị phân v2, UTF-8, chạy bằng `asyncio` và không cần thư viện ngoài.
 

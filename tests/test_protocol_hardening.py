@@ -32,13 +32,27 @@ class ProtocolHardeningTest(unittest.IsolatedAsyncioTestCase):
         await receive(owner_reader)
         return owner_reader, owner_writer, owner_id, guest_reader, guest_writer, guest_id
 
-    async def test_guest_drop_rejected(self):
+    async def test_guest_yen_drop_rejected(self):
         _, owner_writer, _, guest_reader, guest_writer, _ = await self.room()
         await send(guest_writer, {"cmd": "drop", "item_id": 1, "template": 12,
                                   "map": 1, "x": 1, "y": 1})
         error = await receive(guest_reader)
         self.assertEqual((error["type"], error["code"]),
                          ("error", "owner_world_only"))
+        owner_writer.close()
+        guest_writer.close()
+
+    async def test_guest_item_throw_is_accepted_and_capped(self):
+        _, owner_writer, _, guest_reader, guest_writer, guest_id = await self.room()
+        for index in range(8):
+            await send(guest_writer, {"cmd": "drop", "item_id": 100 + index,
+                                      "template": 94, "map": 1, "x": 1, "y": 1})
+            spawn = await receive(guest_reader)
+            self.assertEqual(spawn["type"], "drop_spawn")
+        await send(guest_writer, {"cmd": "drop", "item_id": 200, "template": 94,
+                                  "map": 1, "x": 1, "y": 1})
+        error = await receive(guest_reader)
+        self.assertEqual((error["type"], error["code"]), ("error", "too_many_drops"))
         owner_writer.close()
         guest_writer.close()
 

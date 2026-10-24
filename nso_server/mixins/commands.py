@@ -6,7 +6,7 @@ import asyncio
 import time
 from typing import Any
 
-from ..config import (MAX_DAMAGE, MAX_NAME, MAX_PASSWORD, MAX_ROOM,
+from ..config import (DAMAGE_SKILL_FACTOR, MAX_DAMAGE, MAX_GUEST_DROPS, MAX_NAME, MAX_PASSWORD, MAX_ROOM,
                       MAX_ROOM_DROPS, MAX_ROOMS, OWNER_RESPONSE_TIMEOUT,
                       clean_text, password_digest)
 from ..models import Player, Room
@@ -286,7 +286,8 @@ class CommandsMixin:
             if player.player_id != room.owner_id:
                 reported_max = max(1, int(mob.get("max_hp", 100))) if mob is not None else 100
             reported_hp = max(0, min(int(message.get("hp", reported_max)), reported_max))
-            damage_cap = max(1, min(int(player.appearance.get("damage", 0) or 0), MAX_DAMAGE)) \
+            damage_cap = max(1, min(int(player.appearance.get("damage", 0) or 0)
+                                    * DAMAGE_SKILL_FACTOR, MAX_DAMAGE)) \
                 if player.appearance.get("damage") else MAX_DAMAGE
             damage = max(0, min(int(message.get("damage", 0)), damage_cap))
             respawn_seconds = max(0, min(
@@ -346,7 +347,7 @@ class CommandsMixin:
                     if respawn_seconds > 0 else 0
                 mob["respawn_at"] = deadline
                 if deadline > 0:
-                    asyncio.create_task(self._respawn_room_mob(room, mob_key, deadline))
+                    self.spawn_task(self._respawn_room_mob(room, mob_key, deadline))
             room.sequence += 1
             skill = max(-1, min(int(message.get("skill", -1)), 127))
             await self.broadcast(room, {"type": "mob_state",
@@ -389,15 +390,23 @@ class CommandsMixin:
                               alive=mob["alive"], sequence=room.sequence)
             return
         if command == "drop":
-            if player.player_id != room.owner_id:
-                await send_json(player.writer, {"type": "error", "code": "owner_world_only"})
-                return
             self.prune_expired_drops(room)
             if len(room.drops) >= MAX_ROOM_DROPS:
                 await send_json(player.writer, {"type": "error", "code": "too_many_drops"})
                 return
             item_id = max(0, min(int(message.get("item_id", 0)), 65535))
             template = max(0, min(int(message.get("template", 0)), 65535))
+            if player.player_id != room.owner_id:
+                # A guest may only throw an ordinary bag item at its own feet:
+                # never Yen, and never more than a few rows at a time.
+                guest_drops = sum(1 for row in room.drops.values()
+                                  if row.get("owner") == player.player_id)
+                if template == 12 or message.get("owner"):
+                    await send_json(player.writer, {"type": "error", "code": "owner_world_only"})
+                    return
+                if guest_drops >= MAX_GUEST_DROPS:
+                    await send_json(player.writer, {"type": "error", "code": "too_many_drops"})
+                    return
             map_id = int(message.get("map", player.map_id))
             zone_id = max(0, int(message.get("zone", player.zone_id)))
             if map_id != player.map_id or zone_id != player.zone_id:
@@ -435,7 +444,7 @@ class CommandsMixin:
                     "protected_until": now_ms + 20000,
                     "expires_at": now_ms + 30000}
             room.drops[drop_id] = drop
-            asyncio.create_task(self._expire_room_drop(
+            self.spawn_task(self._expire_room_drop(
                 room, drop_id, int(drop["expires_at"])))
             room.sequence += 1
             await self.broadcast(room, {"type": "drop_spawn", "seq": room.sequence,

@@ -631,7 +631,7 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
                                                "target_actor": b.actor_id, "data": "3"})
         self.assertEqual(leaf["members"][b.player_id]["role"], 3)
         await self.state.interaction(room, b, {"kind": "clan_contribute",
-                                               "target_actor": 0, "data": "600000"})
+                                               "target_actor": 0, "data": "cc-roles,600000"})
         await self.state.interaction(room, a, {"kind": "clan_points",
                                                "target_actor": 0, "data": "2000"})
         self.assertEqual((leaf["coin"], leaf["exp"], leaf["members"][a.player_id]["points"]),

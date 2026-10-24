@@ -58,6 +58,38 @@ class HostMigrationTest(unittest.IsolatedAsyncioTestCase):
         await writer.wait_closed()
         await guest_writer.wait_closed()
 
+    async def test_promotion_purges_old_owner_state_and_announces_leave(self):
+        owner_reader, owner_writer, owner_id = await self.connect("Owner")
+        await send(owner_writer, {"cmd": "create", "room": "PURGE"})
+        await receive(owner_reader)
+        guest_reader, guest_writer, guest_id = await self.connect("Guest")
+        await send(guest_writer, {"cmd": "join", "room": "PURGE"})
+        await receive(guest_reader)
+        await receive(owner_reader)
+        room = self.state.rooms["PURGE"]
+        room.parties[owner_id] = [owner_id, guest_id]
+        room.duels[owner_id] = guest_id
+        room.duels[guest_id] = owner_id
+        owner_writer.close()
+        await owner_writer.wait_closed()
+        self.assertEqual((await receive(guest_reader))["type"], "owner_waiting")
+        room.owner_grace_until = 0.0001
+        await self.state.promote_or_close_room(room)
+        seen = []
+        for _ in range(8):
+            seen.append(await receive(guest_reader))
+            if any(m["type"] == "owner_changed" for m in seen):
+                break
+        types = [m["type"] for m in seen]
+        self.assertIn("player_leave", types)
+        self.assertIn("owner_changed", types)
+        self.assertEqual(room.owner_id, guest_id)
+        self.assertNotIn(owner_id, room.parties)
+        self.assertNotIn(owner_id, room.duels)
+        self.assertNotIn(guest_id, room.duels)
+        guest_writer.close()
+        await guest_writer.wait_closed()
+
     async def test_owner_leave_closes_room(self):
         owner_reader, owner_writer, _ = await self.connect("Owner")
         await send(owner_writer, {"cmd": "create", "room": "LEAVE"})

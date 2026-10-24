@@ -52,49 +52,7 @@ class LifecycleMixin:
                 await self.begin_owner_grace(room, player)
                 return
             self.remember_player(player)
-            for key, members in list(room.parties.items()):
-                if player.player_id not in members:
-                    continue
-                members.remove(player.player_id)
-                if len(members) < 2:
-                    for member in members:
-                        if member in room.players:
-                            await send_json(room.players[member].writer,
-                                            {"type": "party_closed", "seq": room.sequence})
-                    room.parties.pop(key, None)
-                    room.party_locked.pop(key, None)
-                    room.party_dungeons.pop(key, None)
-                else:
-                    if key == player.player_id:
-                        room.parties.pop(key, None)
-                        locked = room.party_locked.pop(key, False)
-                        dungeon = room.party_dungeons.pop(key, 0)
-                        key = members[0]
-                        room.parties[key] = members
-                        if locked:
-                            room.party_locked[key] = True
-                        if dungeon:
-                            room.party_dungeons[key] = dungeon
-                    await self.send_party_roster(room, members)
-            for key, trade in list(room.trades.items()):
-                if player.player_id not in trade.get("players", []):
-                    continue
-                for member in trade.get("players", []):
-                    if member != player.player_id and member in room.players:
-                        await send_json(room.players[member].writer,
-                                        {"type": "trade_cancel", "seq": room.sequence})
-                room.trades.pop(key, None)
-            duel_peer = room.duels.pop(player.player_id, "")
-            if duel_peer:
-                room.duels.pop(duel_peer, None)
-                peer_player = room.players.get(duel_peer)
-                if peer_player is not None:
-                    await send_json(peer_player.writer,
-                                    {"type": "duel_end", "seq": room.sequence,
-                                     "loser_id": player.player_id,
-                                     "loser_actor_id": player.actor_id,
-                                     "winner_id": peer_player.player_id,
-                                     "winner_actor_id": peer_player.actor_id})
+            await self.purge_member_state(room, player.player_id, player.actor_id)
             self.unindex_room_player(room, player)
             room.players.pop(player.player_id, None)
             await self.broadcast(room, {"type": "player_leave", "player_id": player.player_id})
@@ -106,6 +64,53 @@ class LifecycleMixin:
             await player.writer.wait_closed()
         except (ConnectionError, OSError):
             pass
+
+    async def purge_member_state(self, room: Room, player_id: str,
+                                 actor_id: str = "") -> None:
+        """Drop a departed member from parties, trades and duels."""
+        for key, members in list(room.parties.items()):
+            if player_id not in members:
+                continue
+            members.remove(player_id)
+            if len(members) < 2:
+                for member in members:
+                    if member in room.players:
+                        await send_json(room.players[member].writer,
+                                        {"type": "party_closed", "seq": room.sequence})
+                room.parties.pop(key, None)
+                room.party_locked.pop(key, None)
+                room.party_dungeons.pop(key, None)
+            else:
+                if key == player_id:
+                    room.parties.pop(key, None)
+                    locked = room.party_locked.pop(key, False)
+                    dungeon = room.party_dungeons.pop(key, 0)
+                    key = members[0]
+                    room.parties[key] = members
+                    if locked:
+                        room.party_locked[key] = True
+                    if dungeon:
+                        room.party_dungeons[key] = dungeon
+                await self.send_party_roster(room, members)
+        for key, trade in list(room.trades.items()):
+            if player_id not in trade.get("players", []):
+                continue
+            for member in trade.get("players", []):
+                if member != player_id and member in room.players:
+                    await send_json(room.players[member].writer,
+                                    {"type": "trade_cancel", "seq": room.sequence})
+            room.trades.pop(key, None)
+        duel_peer = room.duels.pop(player_id, "")
+        if duel_peer:
+            room.duels.pop(duel_peer, None)
+            peer_player = room.players.get(duel_peer)
+            if peer_player is not None:
+                await send_json(peer_player.writer,
+                                {"type": "duel_end", "seq": room.sequence,
+                                 "loser_id": player_id,
+                                 "loser_actor_id": actor_id,
+                                 "winner_id": peer_player.player_id,
+                                 "winner_actor_id": peer_player.actor_id})
 
     async def join(self, player: Player, room_id: str, password: str = "",
                    skip_password: bool = False) -> None:
@@ -145,6 +150,8 @@ class LifecycleMixin:
             self.log("join_rejected", player_id=player.player_id, room=room_id,
                      reason="wrong_password")
             return
+        if not skip_password:
+            self.password_failures.pop((getattr(player, "peer_ip", "") or "", room_id), None)
         if player.room_id:
             await self.disconnect_from_room(player)
         player.room_id = room.room_id
@@ -322,7 +329,7 @@ class LifecycleMixin:
         self.save_state()
         self.log("owner_waiting", room=room.room_id, owner=owner.player_id,
                  guests=len(room.players))
-        asyncio.create_task(self._owner_grace_timeout(room, owner.player_id,
+        self.spawn_task(self._owner_grace_timeout(room, owner.player_id,
                                                       room.owner_grace_until))
         try:
             owner.writer.close(); await owner.writer.wait_closed()
@@ -348,6 +355,9 @@ class LifecycleMixin:
             await self.close_room_owner_left(room, owner)
             return
         successor = living[0]
+        old_owner_id = room.owner_id
+        await self.purge_member_state(room, old_owner_id)
+        await self.broadcast(room, {"type": "player_leave", "player_id": old_owner_id})
         room.owner_id = successor.player_id
         room.owner_grace_until = 0.0
         room.sequence += 1

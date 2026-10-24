@@ -252,7 +252,12 @@ class ClanInteractionMixin:
             try: await send_json(player.writer, dict(decision))
             except (ConnectionError, OSError): pass
             if clan is not None: await self.broadcast_clan(room, clan)
-        elif kind in ("clan_contribute", "clan_points"):
+        elif kind == "clan_contribute":
+            # Only the keyed "cc-<id>,<amount>" form is acknowledged and made
+            # durable; the old bare-amount form added treasury without a receipt.
+            await send_json(player.writer, {"type": "error", "code": "clan_amount_invalid"})
+            return False
+        elif kind == "clan_points":
             clan = self.clan_for_player(room, player.player_id)
             if clan is None:
                 await send_json(player.writer, {"type": "error", "code": "clan_required"})

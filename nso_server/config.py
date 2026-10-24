@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 from typing import Any
 
 MAX_FRAME = 256 * 1024
@@ -14,17 +15,29 @@ MAX_PASSWORD = 64
 MAX_ROOM_PLAYERS = 12
 MAX_ROOMS = 64
 MAX_ROOM_DROPS = 128
-MAX_CONNECTIONS_PER_IP = 16
+MAX_GUEST_DROPS = 8
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, default)))
+    except ValueError:
+        return default
+
+
+# Behind a reverse proxy, Docker or a tunnel every player shares one source
+# address; raise these through the environment instead of editing the code.
+MAX_CONNECTIONS_PER_IP = _env_int("NSO_MAX_CONNECTIONS_PER_IP", 16)
 COMMANDS_PER_SEC = 15
 COMMANDS_PER_SEC_HOT = 40
 TCP_IDLE_SECONDS = 90.0
 HANDSHAKE_SECONDS = 10.0
-PASSWORD_FAIL_LIMIT = 5
+PASSWORD_FAIL_LIMIT = _env_int("NSO_PASSWORD_FAIL_LIMIT", 5)
 PASSWORD_LOCK_SECONDS = 60.0
 OWNER_GRACE_SECONDS = 45.0
 INVITE_TTL_SECONDS = 30.0
 MAX_YEN_TRANSFER = 50_000_000
 MAX_DAMAGE = 1_000_000
+# A skill or critical hit may exceed the reported base damage by this factor.
+DAMAGE_SKILL_FACTOR = 8
 SERVER_WRITE_HIGH_WATER = 256 * 1024
 REPLACEABLE_EVENTS = frozenset(("player_state", "mob_state", "world_sync",
                                 "clone_state"))

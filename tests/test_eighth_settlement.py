@@ -50,11 +50,11 @@ class EighthSettlementTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(f.last('self', 'error')['code'], 'clan_amount_invalid')
         self.assertEqual(self.clan['coin'], 1900001000)
 
-    async def test_legacy_over_cap_never_silently_clamped(self):
+    async def test_legacy_bare_amount_is_rejected(self):
+        before = self.clan['coin']
         await self.f.call('clan_contribute', data='100000000')
-        await self.f.call('clan_contribute', data='1000')
-        self.assertEqual(self.f.last('self', 'error')['code'], 'clan_fund_limit')
-        self.assertEqual(self.clan['coin'], 2000000000)
+        self.assertEqual(self.f.last('self', 'error')['code'], 'clan_amount_invalid')
+        self.assertEqual(self.clan['coin'], before)
 
     async def test_ack_confirmation_is_idempotent_after_obligation_removed(self):
         f = self.f

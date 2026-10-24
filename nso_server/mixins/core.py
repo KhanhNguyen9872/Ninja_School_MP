@@ -21,6 +21,13 @@ from ..models import Player, Room
 from ..protocol import REQUEST_OPCODES, _decode_value, encode_frame, send_json
 
 class CoreMixin:
+    def spawn_task(self, coro) -> asyncio.Task:
+        """Create a task and keep a reference so it cannot be garbage collected."""
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
+
     def __init__(self, state_file: str | None = None,
                  trace_hot_path: bool = False,
                  log_file: str | None = None,
@@ -29,6 +36,7 @@ class CoreMixin:
         self.players: dict[str, Player] = {}
         self.character_leases: dict[str, tuple[Player, float]] = {}
         self.password_failures: dict[tuple[str, str], tuple[int, float]] = {}
+        self._background_tasks: set[asyncio.Task] = set()
         self.state_file = state_file
         self.saved_rooms: dict[str, list[dict[str, Any]]] = {}
         self.saved_worlds: dict[str, dict[str, Any]] = {}
