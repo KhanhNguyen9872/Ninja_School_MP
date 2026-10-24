@@ -283,7 +283,7 @@ class CoreMixin:
                     await send_json(writer, {"type": "error", "code": "unknown_opcode"})
                     continue
                 if not player.hello_ok and command not in (
-                        "hello", "resume", "create", "join"):
+                        "hello", "resume", "create", "join", "ping"):
                     await send_json(writer, {"type": "error", "code": "hello_required"})
                     break
                 now = time.monotonic()
