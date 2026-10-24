@@ -33,6 +33,10 @@ class Player:
     last_pvp_fatal: bool = False
     # Transient authoritative Effect18/type14; never renewed by appearance.
     pvp_bound_until: float = 0.0
+    hello_ok: bool = False
+    peer_ip: str = ""
+    connected_at: float = field(default_factory=time.monotonic)
+    command_times: list[float] = field(default_factory=list, repr=False)
 
 @dataclass
 class Room:
@@ -67,6 +71,8 @@ class Room:
     pending_deliveries: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
     clan_contributions: dict[str, dict[str, Any]] = field(default_factory=dict)
     clans: dict[str, dict[str, Any]] = field(default_factory=dict)
+    owner_grace_until: float = 0.0
+    pending_invites: dict[str, float] = field(default_factory=dict)
 
     def ensure_world(self) -> None:
         """Rooms start with no server mob rows.

@@ -27,7 +27,8 @@ class Fixture:
   for i in ('peer','outside'):c['members'][i]={'name':i,'role':0,'class_id':1,'level':100,'points':0}
   return c
  async def trade(self,cancel=False):
-  await self.call('trade_accept',target='peer')
+  await self.call('trade_invite',target='peer')
+  await self.call('trade_accept','peer',target='self')
   for a,b,v in [('self','peer','1000|'),('peer','self','200|0,96,1,0,0,-1,0')]:await self.call('trade_offer',a,b,v)
   for a,b in [('self','peer'),('peer','self')]:await self.call('trade_confirm',a,b)
   pre=self.last('self','trade_prepare')

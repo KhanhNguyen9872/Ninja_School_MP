@@ -5,7 +5,7 @@ import secrets
 import time
 from typing import Any
 
-from ..config import MAX_NAME, MAX_PASSWORD, clean_text, password_digest
+from ..config import MAX_NAME, MAX_PASSWORD, MAX_YEN_TRANSFER, clean_text, password_digest
 from ..models import Player, Room
 from ..protocol import send_json
 
@@ -58,7 +58,7 @@ class GameplayInteractionMixin:
             if player.player_id != room.owner_id:
                 await send_json(player.writer, {"type": "error", "code": "owner_world_only"})
                 return False
-            amount = max(0, min(int(message.get("damage", 0)), 2000000000))
+            amount = max(0, min(int(message.get("damage", 0)), MAX_YEN_TRANSFER))
             if amount <= 0:
                 await send_json(player.writer, {"type": "error", "code": "mob_reward_invalid"})
                 return False
@@ -348,7 +348,7 @@ class GameplayInteractionMixin:
             except (ValueError, IndexError):
                 await send_json(player.writer, {"type": "error", "code": "vxmm_invalid_result"})
                 return False
-            if category not in (0, 1) or amount < 0 \
+            if category not in (0, 1) or amount < 0 or amount > MAX_YEN_TRANSFER \
                     or (winner_id and winner_id not in room.players):
                 await send_json(player.writer, {"type": "error", "code": "vxmm_invalid_result"})
                 return False

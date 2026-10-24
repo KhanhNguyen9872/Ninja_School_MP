@@ -9,7 +9,8 @@ trên thiết bị bằng RMS.
 - Tối đa 12 người trong một phòng.
 - Đồng bộ nhân vật, bản đồ, chiến đấu, quái và vật phẩm rơi.
 - Hỗ trợ chat, tổ đội, giao dịch, tỷ thí, gia tộc và hoạt động chung.
-- Lưu snapshot phòng để khôi phục sau khi server khởi động lại.
+- State phòng chỉ sống khi còn chủ (hoặc chủ mới sau host migration). Khởi động lại process vẫn bỏ phòng cũ.
+- Nên chạy sau reverse proxy/tunnel nếu cần TLS; protocol game không nhúng TLS.
 - Hỗ trợ TCP và UDP trên cùng cổng; phía game mặc định dùng TCP.
 - Giao thức nhị phân v2, UTF-8, chạy bằng `asyncio` và không cần thư viện ngoài.
 

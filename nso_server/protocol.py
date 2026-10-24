@@ -10,7 +10,7 @@ REQUEST_OPCODES = {1: "hello", 2: "create", 3: "join", 4: "resume",
                    5: "snapshot", 6: "state", 7: "map", 8: "attack",
                    9: "pickup", 10: "drop", 11: "chat", 12: "private_chat",
                    13: "interaction", 14: "appearance", 15: "clone",
-                   16: "world_sync", 17: "ping", 18: "disconnect"}
+                   16: "world_sync", 17: "ping", 18: "disconnect", 19: "leave"}
 EVENT_TYPES = ("welcome", "hello_ok", "room_joined", "error", "pong",
                "player_join", "player_leave", "snapshot", "player_appearance",
                "player_state", "map_transition", "mob_state", "drop_spawn",
@@ -31,6 +31,7 @@ EVENT_TYPES += ("activity_reward", "activity_state", "activity_closed",
                 "clan_name_assigned", "party_buff", "player_revived",
                 "chan_le_bet", "chan_le_result")
 EVENT_TYPES += ("character_claimed",)
+EVENT_TYPES += ("owner_waiting", "owner_changed")
 EVENT_OPCODES = {name: 64 + index for index, name in enumerate(EVENT_TYPES)}
 WIRE_KEYS = ("cmd", "player_id", "protocol", "name", "room", "password",
              "map", "x", "y", "hp", "max_hp", "mob_id", "damage",

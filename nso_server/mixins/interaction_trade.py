@@ -5,7 +5,7 @@ import secrets
 import time
 from typing import Any
 
-from ..config import MAX_NAME, MAX_PASSWORD, clean_text, password_digest
+from ..config import INVITE_TTL_SECONDS, MAX_NAME, MAX_PASSWORD, clean_text, password_digest
 from ..models import Player, Room
 from ..protocol import send_json
 
@@ -14,8 +14,15 @@ class TradeInteractionMixin:
             self, room: Room, player: Player, target: Player | None,
             message: dict[str, Any], base: dict[str, Any], kind: str) -> bool:
         if kind == "trade_invite":
+            room.pending_invites[f"trade:{player.player_id}:{target.player_id}"] = (
+                time.monotonic() + INVITE_TTL_SECONDS)
             await send_json(target.writer, dict(base, type="trade_invite"))
         elif kind == "trade_accept":
+            invite_key = f"trade:{target.player_id}:{player.player_id}"
+            expires = room.pending_invites.pop(invite_key, 0.0)
+            if expires <= time.monotonic():
+                await send_json(player.writer, {"type": "error", "code": "invite_required"})
+                return False
             participants = (player.player_id, target.player_id)
             if any(event.get("type") == "trade_commit"
                    for participant in participants
@@ -120,8 +127,15 @@ class TradeInteractionMixin:
                     try: await send_json(member.writer, event)
                     except (ConnectionError, OSError): pass
         elif kind == "duel_invite":
+            room.pending_invites[f"duel:{player.player_id}:{target.player_id}"] = (
+                time.monotonic() + INVITE_TTL_SECONDS)
             await send_json(target.writer, dict(base, type="duel_invite"))
         elif kind == "duel_accept":
+            invite_key = f"duel:{target.player_id}:{player.player_id}"
+            expires = room.pending_invites.pop(invite_key, 0.0)
+            if expires <= time.monotonic():
+                await send_json(player.writer, {"type": "error", "code": "invite_required"})
+                return False
             room.duels[player.player_id] = target.player_id
             room.duels[target.player_id] = player.player_id
             await self.send_pair(player, target,

@@ -632,9 +632,9 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(leaf["members"][b.player_id]["role"], 3)
         await self.state.interaction(room, b, {"kind": "clan_contribute",
                                                "target_actor": 0, "data": "600000"})
-        await self.state.interaction(room, b, {"kind": "clan_points",
+        await self.state.interaction(room, a, {"kind": "clan_points",
                                                "target_actor": 0, "data": "2000"})
-        self.assertEqual((leaf["coin"], leaf["exp"], leaf["members"][b.player_id]["points"]),
+        self.assertEqual((leaf["coin"], leaf["exp"], leaf["members"][a.player_id]["points"]),
                          (600000, 2000, 2000))
         await self.state.interaction(room, a, {"kind": "clan_upgrade",
                                                "target_actor": 0, "data": ""})
@@ -1468,7 +1468,8 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
         guest_reader, guest_writer, _ = await self.connect("Guest")
         await send(guest_writer, {"cmd": "join", "room": "AABBCC"})
         await receive(guest_reader); await receive(owner_reader)
-        owner_writer.close(); await owner_writer.wait_closed()
+        await send(owner_writer, {"cmd": "leave"})
+        await owner_writer.drain()
         closed = await receive(guest_reader)
         self.assertEqual((closed["type"], closed["code"]),
                          ("error", "room_owner_left"))
@@ -1788,19 +1789,26 @@ class RoomServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await receive(owner_reader))["type"], "drop_taken")
         self.assertEqual((await receive(guest_reader))["type"], "drop_taken")
 
-        # A non-owner cannot assign its loot to another identity.
+        # A non-owner cannot spawn loot.
         await send(guest_writer, {"cmd": "drop", "item_id": 80,
                                   "template": 42, "item_type": 4,
                                   "owner": owner_id,
                                   "map": 22, "zone": 26,
                                   "x": 120, "y": 200})
-        forged_owner_view = await receive(owner_reader)
-        forged_guest_view = await receive(guest_reader)
-        self.assertEqual(forged_guest_view["drop"]["owner"], guest_id)
+        forged = await receive(guest_reader)
+        self.assertEqual((forged["type"], forged["code"]),
+                         ("error", "owner_world_only"))
+
+        await send(owner_writer, {"cmd": "drop", "item_id": 81,
+                                  "template": 42, "item_type": 4,
+                                  "map": 22, "zone": 26,
+                                  "x": 120, "y": 200})
+        await receive(owner_reader)
+        owner_spawn = await receive(guest_reader)
 
         # NSO_FINAL removes ordinary ItemMap rows at 30 seconds without
         # waiting for a later pickup, snapshot or another drop command.
-        expiring_id = forged_guest_view["drop"]["drop_id"]
+        expiring_id = owner_spawn["drop"]["drop_id"]
         deadline = int(time.time() * 1000) + 20
         room.drops[expiring_id]["expires_at"] = deadline
         await self.state._expire_room_drop(room, expiring_id, deadline)

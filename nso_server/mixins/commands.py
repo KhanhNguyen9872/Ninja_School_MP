@@ -6,8 +6,9 @@ import asyncio
 import time
 from typing import Any
 
-from ..config import (MAX_NAME, MAX_PASSWORD, MAX_ROOM, MAX_ROOM_DROPS,
-                      OWNER_RESPONSE_TIMEOUT, clean_text, password_digest)
+from ..config import (MAX_DAMAGE, MAX_NAME, MAX_PASSWORD, MAX_ROOM,
+                      MAX_ROOM_DROPS, MAX_ROOMS, OWNER_RESPONSE_TIMEOUT,
+                      clean_text, password_digest)
 from ..models import Player, Room
 from ..protocol import send_json
 
@@ -59,15 +60,29 @@ class CommandsMixin:
                           mob_id=mob.get("mob_id", ""), sequence=room.sequence)
 
     async def command(self, player: Player, message: dict[str, Any]) -> None:
+        try:
+            await self._command(player, message)
+        except (ValueError, TypeError, KeyError):
+            try:
+                await send_json(player.writer, {"type": "error", "code": "bad_request"})
+            except (ConnectionError, OSError):
+                pass
+
+    async def _command(self, player: Player, message: dict[str, Any]) -> None:
         command = clean_text(message.get("cmd"), 24).lower()
         self.log_command(player, command, message)
         if command == "hello":
             player.name = clean_text(message.get("name"), MAX_NAME) or "player"
+            player.hello_ok = True
             await send_json(player.writer, {"type": "hello_ok", "player_id": player.player_id, "name": player.name})
             return
         if command == "create":
+            player.hello_ok = True
             if player.room_id:
                 await send_json(player.writer, {"type": "error", "code": "already_in_room"})
+                return
+            if len(self.rooms) >= MAX_ROOMS:
+                await send_json(player.writer, {"type": "error", "code": "too_many_rooms"})
                 return
             room_id = clean_text(message.get("room"), MAX_ROOM).upper() or self.new_room_id()
             if room_id in self.rooms:
@@ -83,6 +98,7 @@ class CommandsMixin:
             await self.join(player, room_id, password)
             return
         if command == "join":
+            player.hello_ok = True
             player.cheat_enabled = bool(message.get("cheat_enabled", False))
             await self.join(player, clean_text(message.get("room"), MAX_ROOM).upper(),
                             clean_text(message.get("password"), MAX_PASSWORD))
@@ -97,7 +113,7 @@ class CommandsMixin:
             player.writer.close()
             return
         if command == "leave":
-            await self.disconnect_from_room(player)
+            await self.owner_leave(player)
             return
         if command == "ping":
             now = time.monotonic()
@@ -267,8 +283,12 @@ class CommandsMixin:
             mob_key = f"{player.map_id}:{player.zone_id}:{mob_id}"
             mob = room.mobs.get(mob_key)
             reported_max = max(1, min(int(message.get("max_hp", 100)), 2000000000))
+            if player.player_id != room.owner_id:
+                reported_max = max(1, int(mob.get("max_hp", 100))) if mob is not None else 100
             reported_hp = max(0, min(int(message.get("hp", reported_max)), reported_max))
-            damage = max(0, min(int(message.get("damage", 0)), 1000000))
+            damage_cap = max(1, min(int(player.appearance.get("damage", 0) or 0), MAX_DAMAGE)) \
+                if player.appearance.get("damage") else MAX_DAMAGE
+            damage = max(0, min(int(message.get("damage", 0)), damage_cap))
             respawn_seconds = max(0, min(
                 int(message.get("respawn_seconds", 0)), 3600))
             # The room creator owns world respawn cadence. A zero-damage,
@@ -369,6 +389,9 @@ class CommandsMixin:
                               alive=mob["alive"], sequence=room.sequence)
             return
         if command == "drop":
+            if player.player_id != room.owner_id:
+                await send_json(player.writer, {"type": "error", "code": "owner_world_only"})
+                return
             self.prune_expired_drops(room)
             if len(room.drops) >= MAX_ROOM_DROPS:
                 await send_json(player.writer, {"type": "error", "code": "too_many_drops"})
@@ -381,6 +404,9 @@ class CommandsMixin:
                 await send_json(player.writer, {"type": "error", "code": "drop_wrong_map"})
                 return
             drop_id = f"{player.player_id}-{item_id}"
+            if drop_id in room.drops:
+                await send_json(player.writer, {"type": "error", "code": "drop_exists"})
+                return
             now_ms = int(time.time() * 1000)
             # The owner client is the shared-world executor.  When it
             # materializes a remotely confirmed death, the fatal hitter is the
@@ -500,29 +526,23 @@ class CommandsMixin:
                          x=player.x, y=player.y, hp=player.hp,
                          sequence=room.sequence)
             return
-        if command in ("event", "chat"):
-            body = clean_text(message.get("text"), 512) if command == "chat" else message.get("payload", {})
+        if command == "chat":
+            body = clean_text(message.get("text"), 512)
             room.sequence += 1
-            if command == "chat":
-                channel = clean_text(message.get("channel"), 16).lower()
-                if channel not in ("world", "map"):
-                    channel = "world"
-                event = {"type": "chat", "seq": room.sequence,
-                         "channel": channel, "player_id": player.player_id,
-                         "actor_id": player.actor_id, "name": player.name,
-                         "map": player.map_id, "zone": player.zone_id, "text": body}
-                if channel == "map":
-                    await self.broadcast_map(room, player.map_id, event,
-                                             player.zone_id)
-                else:
-                    await self.broadcast(room, event)
+            channel = clean_text(message.get("channel"), 16).lower()
+            if channel not in ("world", "map"):
+                channel = "world"
+            event = {"type": "chat", "seq": room.sequence,
+                     "channel": channel, "player_id": player.player_id,
+                     "actor_id": player.actor_id, "name": player.name,
+                     "map": player.map_id, "zone": player.zone_id, "text": body}
+            if channel == "map":
+                await self.broadcast_map(room, player.map_id, event,
+                                         player.zone_id)
             else:
-                await self.broadcast(room, {"type": "event", "seq": room.sequence,
-                                             "player_id": player.player_id,
-                                             "payload": body}, player.player_id)
+                await self.broadcast(room, event)
             self.save_state()
-            self.log(command, room=room.room_id, player_id=player.player_id,
-                     channel=channel if command == "chat" else "",
-                     text=body if command == "chat" else "<event>", sequence=room.sequence)
+            self.log("chat", room=room.room_id, player_id=player.player_id,
+                     channel=channel, text=body, sequence=room.sequence)
             return
         await send_json(player.writer, {"type": "error", "code": "unknown_command"})

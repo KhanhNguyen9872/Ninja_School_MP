@@ -257,6 +257,9 @@ class ClanInteractionMixin:
             if clan is None:
                 await send_json(player.writer, {"type": "error", "code": "clan_required"})
                 return False
+            if kind == "clan_points" and player.player_id != room.owner_id:
+                await send_json(player.writer, {"type": "error", "code": "owner_world_only"})
+                return False
             try: amount = max(0, min(int(str(message.get("data", "0"))), 100000000))
             except ValueError: amount = 0
             if amount <= 0:

@@ -66,7 +66,8 @@ class DeliveryTransactionTest(unittest.IsolatedAsyncioTestCase):
         a=Player('a','A',Writer(),actor_id=10001);b=Player('b','B',Writer(),actor_id=10002)
         room.players={'a':a,'b':b}
         try:
-            await state.handle_trade_interaction(room,a,b,{}, {},'trade_accept')
+            await state.handle_trade_interaction(room,a,b,{}, {},'trade_invite')
+            await state.handle_trade_interaction(room,b,a,{}, {},'trade_accept')
             for x,y,offer in [(a,b,'1000|'),(b,a,'200|0,96,1,0,0,-1,0')]:
                 await state.handle_trade_interaction(room,x,y,{'data':offer},{},'trade_offer')
             for x,y in [(a,b),(b,a)]:await state.handle_trade_interaction(room,x,y,{}, {},'trade_confirm')

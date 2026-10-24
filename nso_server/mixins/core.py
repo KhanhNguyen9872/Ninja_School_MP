@@ -11,9 +11,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from ..config import (BUFFERED_RELIABLE_EVENTS, IMPORTANT_LOG_EVENTS,
-                      MAX_FRAME, MAX_PASSWORD, MAX_ROOM, REPLACEABLE_EVENTS,
-                      SERVER_WRITE_HIGH_WATER, clean_text, write_buffer_size)
+from ..config import (BUFFERED_RELIABLE_EVENTS, COMMANDS_PER_SEC,
+                      COMMANDS_PER_SEC_HOT, HANDSHAKE_SECONDS, HOT_PATH_COMMANDS,
+                      IMPORTANT_LOG_EVENTS, MAX_CONNECTIONS_PER_IP, MAX_FRAME,
+                      MAX_PASSWORD, MAX_ROOM, REPLACEABLE_EVENTS,
+                      SERVER_WRITE_HIGH_WATER, TCP_IDLE_SECONDS, clean_text,
+                      write_buffer_size)
 from ..models import Player, Room
 from ..protocol import REQUEST_OPCODES, _decode_value, encode_frame, send_json
 
@@ -25,6 +28,7 @@ class CoreMixin:
         self.rooms: dict[str, Room] = {}
         self.players: dict[str, Player] = {}
         self.character_leases: dict[str, tuple[Player, float]] = {}
+        self.password_failures: dict[tuple[str, str], tuple[int, float]] = {}
         self.state_file = state_file
         self.saved_rooms: dict[str, list[dict[str, Any]]] = {}
         self.saved_worlds: dict[str, dict[str, Any]] = {}
@@ -222,16 +226,31 @@ class CoreMixin:
                 raw_socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
             except (AttributeError, OSError):
                 pass
+        peer = writer.get_extra_info("peername")
+        peer_ip = peer[0] if isinstance(peer, tuple) and peer else ""
+        if sum(1 for existing in self.players.values()
+               if getattr(existing, "peer_ip", "") == peer_ip and peer_ip) >= MAX_CONNECTIONS_PER_IP:
+            try:
+                await send_json(writer, {"type": "error", "code": "too_many_connections"})
+            except (ConnectionError, OSError):
+                pass
+            writer.close()
+            return
         player = Player(secrets.token_hex(6), "player", writer)
         player.actor_id = self.actor_id_for(player.player_id)
+        player.peer_ip = peer_ip
         self.players[player.player_id] = player
-        peer = writer.get_extra_info("peername")
         self.log("connect", player_id=player.player_id, peer=str(peer), connections=len(self.players))
         try:
             await send_json(writer, {"type": "welcome", "player_id": player.player_id, "protocol": 2})
             while True:
+                idle = TCP_IDLE_SECONDS if player.hello_ok else HANDSHAKE_SECONDS
                 try:
-                    header = await reader.readexactly(8)
+                    header = await asyncio.wait_for(reader.readexactly(8), idle)
+                except asyncio.TimeoutError:
+                    await send_json(writer, {"type": "error",
+                                            "code": "handshake_timeout" if not player.hello_ok else "idle_timeout"})
+                    break
                 except asyncio.IncompleteReadError:
                     break
                 if header[:2] != b"NS" or header[2] != 2:
@@ -255,8 +274,19 @@ class CoreMixin:
                 if command is None:
                     await send_json(writer, {"type": "error", "code": "unknown_opcode"})
                     continue
+                if not player.hello_ok and command not in (
+                        "hello", "resume", "create", "join"):
+                    await send_json(writer, {"type": "error", "code": "hello_required"})
+                    break
+                now = time.monotonic()
+                limit = COMMANDS_PER_SEC_HOT if command in HOT_PATH_COMMANDS else COMMANDS_PER_SEC
+                player.command_times = [stamp for stamp in player.command_times if now - stamp < 1.0]
+                if len(player.command_times) >= limit:
+                    await send_json(writer, {"type": "error", "code": "rate_limited"})
+                    continue
+                player.command_times.append(now)
                 message["cmd"] = command
-                player.last_seen = time.monotonic()
+                player.last_seen = now
                 await self.command(player, message)
                 if getattr(writer, "is_closing", lambda: False)():
                     break

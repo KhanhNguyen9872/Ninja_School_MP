@@ -43,7 +43,7 @@ class PersistenceMixin:
         rooms: dict[str, list[dict[str, Any]]] = {}
         worlds: dict[str, dict[str, Any]] = {}
         for room_id, room in self.rooms.items():
-            if room.owner_id not in room.players:
+            if room.owner_id not in room.players and room.owner_grace_until <= time.monotonic():
                 continue
             room.ensure_world()
             self.prune_expired_drops(room)

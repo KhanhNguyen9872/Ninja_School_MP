@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import secrets
 import time
 
-from ..config import MAX_NAME, MAX_ROOM_PLAYERS, clean_text, password_digest
+from ..config import (MAX_NAME, MAX_ROOM_PLAYERS, OWNER_GRACE_SECONDS,
+                      PASSWORD_FAIL_LIMIT, PASSWORD_LOCK_SECONDS,
+                      clean_text, password_digest)
 from ..models import Player, Room
 from ..protocol import send_json
 
@@ -43,33 +46,10 @@ class LifecycleMixin:
             if room.owner_id == player.player_id:
                 guests = [guest for guest in room.players.values()
                           if guest.player_id != player.player_id]
-                for guest in guests:
-                    try:
-                        await send_json(guest.writer, {"type": "error",
-                                                       "code": "room_owner_left"})
-                    except (ConnectionError, OSError):
-                        pass
-                    self.release_character_leases(guest)
-                    self.unindex_room_player(room, guest)
-                    self.players.pop(guest.player_id, None)
-                    guest.room_id = None
-                    try:
-                        guest.writer.close()
-                        await guest.writer.wait_closed()
-                    except (ConnectionError, OSError):
-                        pass
-                room.players.clear()
-                room.actor_index.clear()
-                player.room_id = None
-                self.rooms.pop(room.room_id, None)
-                self.forget_saved_room(room.room_id)
-                self.save_state()
-                self.log("room_closed_owner_left", room=room.room_id,
-                         owner=player.player_id, kicked=len(guests))
-                try:
-                    player.writer.close(); await player.writer.wait_closed()
-                except (ConnectionError, OSError):
-                    pass
+                if not guests:
+                    await self.close_room_owner_left(room, player)
+                    return
+                await self.begin_owner_grace(room, player)
                 return
             self.remember_player(player)
             for key, members in list(room.parties.items()):
@@ -151,9 +131,17 @@ class LifecycleMixin:
                      reason="room_full", players=len(room.players),
                      capacity=MAX_ROOM_PLAYERS)
             return
+        if not skip_password and self.password_locked(getattr(player, "peer_ip", ""), room_id):
+            await send_json(player.writer, {"type": "error", "code": "password_locked"})
+            self.log("join_rejected", player_id=player.player_id, room=room_id,
+                     reason="password_locked")
+            return
         supplied_hash = password_digest(password)
         if not skip_password and not hmac.compare_digest(room.password_hash, supplied_hash):
-            await send_json(player.writer, {"type": "error", "code": "wrong_password"})
+            if self.lock_password_failure(getattr(player, "peer_ip", ""), room_id):
+                await send_json(player.writer, {"type": "error", "code": "password_locked"})
+            else:
+                await send_json(player.writer, {"type": "error", "code": "wrong_password"})
             self.log("join_rejected", player_id=player.player_id, room=room_id,
                      reason="wrong_password")
             return
@@ -162,6 +150,8 @@ class LifecycleMixin:
         player.room_id = room.room_id
         if not room.owner_id:
             room.owner_id = player.player_id
+        if player.player_id == room.owner_id:
+            room.owner_grace_until = 0.0
         resume_token = secrets.token_urlsafe(32)
         player.resume_token_hash = hashlib.sha256(
             resume_token.encode("utf-8")).hexdigest()
@@ -213,7 +203,8 @@ class LifecycleMixin:
             await send_json(player.writer, {"type": "error", "code": "resume_fields_required"})
             return
         room = self.rooms.get(room_id)
-        if room is None or room.owner_id not in room.players:
+        if room is None or (room.owner_id not in room.players
+                            and room.owner_grace_until <= time.monotonic()):
             await send_json(player.writer, {"type": "error", "code": "room_not_found"})
             return
         saved = self.saved_player_row(room_id, player_id)
@@ -252,6 +243,7 @@ class LifecycleMixin:
         clone = saved.get("clone", {})
         player.clone = dict(clone) if isinstance(clone, dict) else {}
         self.players[player.player_id] = player
+        player.hello_ok = True
         await self.join(player, room_id, skip_password=True)
 
     async def disconnect_from_room(self, player: Player) -> None:
@@ -269,4 +261,114 @@ class LifecycleMixin:
                  players=len(room.players))
         if not room.players:
             self.rooms.pop(room.room_id, None)
+            self.forget_saved_room(room.room_id)
+        elif room.owner_id not in room.players and room.owner_grace_until <= time.monotonic():
+            await self.promote_or_close_room(room)
         self.save_state()
+
+    async def owner_leave(self, player: Player) -> None:
+        room = self.rooms.get(player.room_id or "")
+        if room is None:
+            player.room_id = None
+            return
+        if room.owner_id == player.player_id:
+            await self.close_room_owner_left(room, player)
+            return
+        await self.disconnect_from_room(player)
+
+    async def close_room_owner_left(self, room: Room, owner: Player) -> None:
+        guests = [guest for guest in room.players.values()
+                  if guest.player_id != owner.player_id]
+        for guest in guests:
+            try:
+                await send_json(guest.writer, {"type": "error",
+                                               "code": "room_owner_left"})
+            except (ConnectionError, OSError):
+                pass
+            self.release_character_leases(guest)
+            self.unindex_room_player(room, guest)
+            self.players.pop(guest.player_id, None)
+            guest.room_id = None
+            try:
+                guest.writer.close()
+                await guest.writer.wait_closed()
+            except (ConnectionError, OSError):
+                pass
+        room.players.clear()
+        room.actor_index.clear()
+        room.owner_grace_until = 0.0
+        owner.room_id = None
+        self.players.pop(owner.player_id, None)
+        self.rooms.pop(room.room_id, None)
+        self.forget_saved_room(room.room_id)
+        self.save_state()
+        self.log("room_closed_owner_left", room=room.room_id,
+                 owner=owner.player_id, kicked=len(guests))
+        writer = getattr(owner, "writer", None)
+        if writer is not None:
+            try:
+                writer.close(); await writer.wait_closed()
+            except (ConnectionError, OSError):
+                pass
+
+    async def begin_owner_grace(self, room: Room, owner: Player) -> None:
+        self.remember_player(owner)
+        self.unindex_room_player(room, owner)
+        room.players.pop(owner.player_id, None)
+        owner.room_id = None
+        room.owner_grace_until = time.monotonic() + OWNER_GRACE_SECONDS
+        await self.broadcast(room, {"type": "owner_waiting", "seq": room.sequence,
+                                    "owner_id": room.owner_id})
+        self.save_state()
+        self.log("owner_waiting", room=room.room_id, owner=owner.player_id,
+                 guests=len(room.players))
+        asyncio.create_task(self._owner_grace_timeout(room, owner.player_id,
+                                                      room.owner_grace_until))
+        try:
+            owner.writer.close(); await owner.writer.wait_closed()
+        except (ConnectionError, OSError):
+            pass
+
+    async def _owner_grace_timeout(self, room: Room, owner_id: str,
+                                   deadline: float) -> None:
+        await asyncio.sleep(max(0.0, deadline - time.monotonic()))
+        if self.rooms.get(room.room_id) is not room:
+            return
+        if room.owner_id != owner_id or room.owner_grace_until != deadline:
+            return
+        if room.owner_id in room.players:
+            room.owner_grace_until = 0.0
+            return
+        await self.promote_or_close_room(room)
+
+    async def promote_or_close_room(self, room: Room) -> None:
+        living = [guest for guest in room.players.values() if guest.player_id]
+        if not living:
+            owner = Player(room.owner_id, "owner", None)
+            await self.close_room_owner_left(room, owner)
+            return
+        successor = living[0]
+        room.owner_id = successor.player_id
+        room.owner_grace_until = 0.0
+        room.sequence += 1
+        await self.broadcast(room, {"type": "owner_changed", "seq": room.sequence,
+                                    "owner_id": room.owner_id})
+        self.save_state()
+        self.log("owner_changed", room=room.room_id, owner=room.owner_id,
+                 players=len(room.players))
+
+    def password_locked(self, ip: str, room_id: str) -> bool:
+        row = self.password_failures.get((ip or "", room_id))
+        return bool(row and row[1] > time.monotonic())
+
+    def lock_password_failure(self, ip: str, room_id: str) -> bool:
+        key = (ip or "", room_id)
+        count, until = self.password_failures.get(key, (0, 0.0))
+        if until > time.monotonic():
+            return True
+        count += 1
+        if count >= PASSWORD_FAIL_LIMIT:
+            self.password_failures[key] = (0, time.monotonic() + PASSWORD_LOCK_SECONDS)
+            return True
+        self.password_failures[key] = (count, 0.0)
+        return False
