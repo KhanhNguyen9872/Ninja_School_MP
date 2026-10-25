@@ -55,6 +55,9 @@ class PartyInteractionMixin:
         probe = room.task_probes.get(probe_id)
         if probe is None or player.player_id not in probe["pending"]:
             return False
+        if not self.boss_order_leader_valid(room, probe):
+            room.task_probes.pop(probe_id, None)
+            return False
         try:
             status = int(status_text)
         except ValueError:
@@ -71,9 +74,20 @@ class PartyInteractionMixin:
             await self.finish_boss_order(room, probe_id)
         return True
 
+    def boss_order_leader_valid(self, room: Room, probe: dict[str, Any]) -> bool:
+        """The requester must still be present and still lead the party the probe was sent to."""
+        leader_id = probe["leader"]
+        if leader_id not in room.players:
+            return False
+        _, members = self.party_for(room, leader_id)
+        if members:
+            return members[0] == leader_id and all(
+                m in members for m in probe["members"])
+        return not probe["members"]
+
     async def finish_boss_order(self, room: Room, probe_id: str) -> None:
         probe = room.task_probes.pop(probe_id, None)
-        if probe is None:
+        if probe is None or not self.boss_order_leader_valid(room, probe):
             return
         for member_id in [probe["leader"]] + list(probe["members"]):
             member = room.players.get(member_id)

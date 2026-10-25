@@ -12,6 +12,9 @@ from ..config import (DAMAGE_SKILL_FACTOR, MAX_DAMAGE, MAX_GUEST_DROPS, MAX_NAME
 from ..models import Player, Room
 from ..protocol import send_json
 
+MAX_PARTY_EXP_PER_HIT = 100000
+
+
 class CommandsMixin:
     async def _expire_room_drop(self, room: Room, drop_id: str,
                                 deadline: int) -> None:
@@ -328,6 +331,10 @@ class CommandsMixin:
                        "x": player.x, "y": player.y,
                        "hp": reported_max, "max_hp": reported_max,
                        "alive": reported_max > 0}
+                if player.player_id != room.owner_id:
+                    # A row the owner never projected has unverifiable metadata:
+                    # it can still be fought but never grants party kill/EXP credit.
+                    mob["guest_row"] = True
                 room.mobs[mob_key] = mob
             elif not mob.get("alive", False):
                 if reported_hp > 0:
@@ -338,8 +345,11 @@ class CommandsMixin:
                 return
             was_alive = bool(mob.get("alive", False))
             mob["max_hp"] = reported_max
-            mob["template"] = max(0, min(int(message.get("drop_template", mob.get("template", 0))), 65535))
-            mob["level_boss"] = max(0, min(int(message.get("level_boss", mob.get("level_boss", 0))), 255))
+            if player.player_id == room.owner_id:
+                mob["template"] = max(0, min(int(message.get("drop_template", mob.get("template", 0))), 65535))
+                mob["level_boss"] = max(0, min(int(message.get("level_boss", mob.get("level_boss", 0))), 255))
+            elif mob.get("guest_row"):
+                mob["level_boss"] = 0   # unverified rows never carry a boss tier
             mob["hp"] = max(0, int(mob["hp"]) - damage) if was_alive else reported_hp
             mob["alive"] = mob["hp"] > 0
             if was_alive and not mob["alive"]:
@@ -357,7 +367,9 @@ class CommandsMixin:
             party_exp = max(0, min(int(message.get("party_exp", 0)), 2147483647))
             members = next((members for members in room.parties.values()
                             if player.player_id in members), [])
-            if was_alive and not mob["alive"] and members:
+            killed = was_alive and not mob["alive"]
+            verified = not mob.get("guest_row")
+            if killed and members and verified:
                 for member_id in members:
                     member = room.players.get(member_id)
                     if member is None or member is player or member.map_id != player.map_id \
@@ -369,6 +381,12 @@ class CommandsMixin:
                                                     "player_id": player.player_id,
                                                     "template": mob["template"],
                                                     "level_boss": mob["level_boss"]})
+            if verified and damage > 0:
+                # Group EXP is paid per damaging hit on a mob the owner projected;
+                # a forged request can neither skip the hit nor exceed the hit bound.
+                party_exp = min(party_exp, MAX_PARTY_EXP_PER_HIT)
+            else:
+                party_exp = 0
             if party_exp > 0 and members:
                 attacker_level = int(player.appearance.get("level", 1))
                 for member_id in members:
@@ -442,6 +460,7 @@ class CommandsMixin:
                     "expire": int(message.get("expire", -1)),
                     "data": clean_text(message.get("data"), 1024),
                     "protected_until": now_ms + 20000,
+                    "guest_thrown": player.player_id != room.owner_id,
                     "expires_at": now_ms + 30000}
             room.drops[drop_id] = drop
             self.spawn_task(self._expire_room_drop(
@@ -479,7 +498,8 @@ class CommandsMixin:
             # 20 seconds. TYPE_TASK (25) remains owner-only even afterwards.
             if owner_id and owner_id != player.player_id and (
                     int(time.time() * 1000) < protected
-                    or int(drop.get("item_type", -1)) == 25):
+                    or int(drop.get("item_type", -1)) == 25
+                    or drop.get("guest_thrown")):
                 await send_json(player.writer, {"type": "error", "code": "drop_owned"})
                 return
             if abs(int(drop.get("x", 0)) - player.x) >= 150 \

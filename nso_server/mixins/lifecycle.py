@@ -68,6 +68,9 @@ class LifecycleMixin:
     async def purge_member_state(self, room: Room, player_id: str,
                                  actor_id: str = "") -> None:
         """Drop a departed member from parties, trades and duels."""
+        for probe_id, probe in list(room.task_probes.items()):
+            if probe["leader"] == player_id or player_id in probe["members"]:
+                room.task_probes.pop(probe_id, None)
         for key, members in list(room.parties.items()):
             if player_id not in members:
                 continue
