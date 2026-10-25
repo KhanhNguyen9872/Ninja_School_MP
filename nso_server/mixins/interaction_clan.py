@@ -152,12 +152,17 @@ class ClanInteractionMixin:
             await self.broadcast_clan(room, clan)
         elif kind == "clan_kick":
             clan = self.clan_for_player(room, player.player_id)
-            if clan is None or clan.get("leader_id") != player.player_id:
+            # Char.kickClanMember: leader (4) and deputy (3) may kick members of a lower rank.
+            actor_role = self.clan_actor_role(clan, player.player_id)
+            if clan is None or actor_role < 3:
                 await send_json(player.writer, {"type": "error", "code": "clan_role_denied"})
                 return False
             member = clan.get("members", {}).get(target.player_id)
             if member is None or target.player_id == player.player_id:
                 await send_json(player.writer, {"type": "error", "code": "clan_member_not_found"})
+                return False
+            if int(member.get("role", 0)) >= actor_role or clan.get("leader_id") == target.player_id:
+                await send_json(player.writer, {"type": "error", "code": "clan_role_denied"})
                 return False
             fee = {3: 100000, 2: 50000, 1: 20000}.get(int(member.get("role", 0)), 10000)
             if int(clan.get("coin", 0)) < fee:
@@ -335,7 +340,8 @@ class ClanInteractionMixin:
             await self.broadcast_clan(room, clan)
         elif kind == "clan_upgrade":
             clan = self.clan_for_player(room, player.player_id)
-            if clan is None or clan.get("leader_id") != player.player_id:
+            # Char.clanUpLevel: leader and deputy; item unlock stays leader-only.
+            if clan is None or self.clan_actor_role(clan, player.player_id) < 3:
                 await send_json(player.writer, {"type": "error", "code": "clan_role_denied"})
                 return False
             level = int(clan.get("level", 1)); exp = self.clan_exp_next(level)
@@ -503,7 +509,7 @@ class ClanInteractionMixin:
             now = int(time.time() * 1000)
             fresh = not territory.get("active")
             if fresh:
-                if role < 3 or player.player_id != room.owner_id:
+                if role < 3:
                     await send_json(player.writer, {"type": "error", "code": "clan_role_denied"}); return False
                 if int(territory.get("entries", 0)) <= 0:
                     await send_json(player.writer, {"type": "error", "code": "clan_territory_no_entries"}); return False

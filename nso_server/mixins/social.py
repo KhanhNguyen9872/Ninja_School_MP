@@ -150,6 +150,15 @@ class SocialMixin:
                      if player_id in clan.get("members", {})), None)
 
     @staticmethod
+    def clan_actor_role(clan: dict[str, Any] | None, player_id: str) -> int:
+        """Clan rank used for authority checks: 4 leader, 3 deputy, else the stored rank."""
+        if clan is None:
+            return -1
+        if clan.get("leader_id") == player_id:
+            return 4
+        return int(clan.get("members", {}).get(player_id, {}).get("role", 0))
+
+    @staticmethod
     def refresh_clan_territory(clan: dict[str, Any]) -> dict[str, Any]:
         territory = clan.setdefault("territory", {"entries": 1, "use_card": 1})
         now = int(time.time() * 1000); day = int((time.time() + 7 * 3600) // 86400)
