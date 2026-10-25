@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import secrets
 import time
@@ -9,7 +10,77 @@ from ..config import MAX_NAME, MAX_PASSWORD, clean_text, password_digest
 from ..models import Player, Room
 from ..protocol import send_json
 
+BOSS_ORDER_DENIALS = {1: "other_task", 2: "low_level", 3: "no_count"}
+BOSS_ORDER_TIMEOUT = 5.0
+
+
 class PartyInteractionMixin:
+    async def start_boss_order(self, room: Room, player: Player) -> bool:
+        """NSO_FINAL Char.orderTaskBoss: leader-only, all same-zone living members must qualify."""
+        _, members = self.party_for(room, player.player_id)
+        if members and members[0] != player.player_id:
+            await send_json(player.writer, {"type": "task_denied", "code": "not_leader"})
+            return False
+        if any(probe.get("leader") == player.player_id for probe in room.task_probes.values()):
+            await send_json(player.writer, {"type": "task_denied", "code": "busy"})
+            return False
+        expected = []
+        for member_id in members:
+            member = room.players.get(member_id)
+            if member is None or member is player or member.hp <= 0                     or member.map_id != player.map_id or member.zone_id != player.zone_id:
+                continue
+            expected.append(member_id)
+        probe_id = secrets.token_hex(6)
+        room.task_probes[probe_id] = {"leader": player.player_id, "pending": set(expected),
+                                      "members": list(expected)}
+        if not expected:
+            await self.finish_boss_order(room, probe_id)
+            return True
+        for member_id in expected:
+            await send_json(room.players[member_id].writer,
+                            {"type": "task_probe", "seq": room.sequence,
+                             "data": probe_id, "player_id": player.player_id})
+        self.spawn_task(self.expire_boss_order(room, probe_id))
+        return True
+
+    async def expire_boss_order(self, room: Room, probe_id: str) -> None:
+        await asyncio.sleep(BOSS_ORDER_TIMEOUT)
+        probe = room.task_probes.pop(probe_id, None)
+        leader = room.players.get(probe["leader"]) if probe else None
+        if leader is not None:
+            await send_json(leader.writer, {"type": "task_denied", "code": "no_response"})
+
+    async def record_boss_ack(self, room: Room, player: Player, data: str) -> bool:
+        probe_id, _, status_text = data.partition(",")
+        probe = room.task_probes.get(probe_id)
+        if probe is None or player.player_id not in probe["pending"]:
+            return False
+        try:
+            status = int(status_text)
+        except ValueError:
+            status = 1
+        if status != 0:
+            room.task_probes.pop(probe_id, None)
+            leader = room.players.get(probe["leader"])
+            if leader is not None:
+                await send_json(leader.writer, {"type": "task_denied",
+                                                "code": BOSS_ORDER_DENIALS.get(status, "other_task")})
+            return False
+        probe["pending"].discard(player.player_id)
+        if not probe["pending"]:
+            await self.finish_boss_order(room, probe_id)
+        return True
+
+    async def finish_boss_order(self, room: Room, probe_id: str) -> None:
+        probe = room.task_probes.pop(probe_id, None)
+        if probe is None:
+            return
+        for member_id in [probe["leader"]] + list(probe["members"]):
+            member = room.players.get(member_id)
+            if member is not None:
+                await send_json(member.writer, {"type": "task_assign", "seq": room.sequence,
+                                                "player_id": probe["leader"]})
+
     async def handle_party_interaction(
             self, room: Room, player: Player, target: Player | None,
             message: dict[str, Any], base: dict[str, Any], kind: str) -> bool:
@@ -163,6 +234,10 @@ class PartyInteractionMixin:
                             room.party_dungeons[key] = dungeon
                     await self.send_party_roster(room, members)
                 break
+        elif kind == "task_boss_order":
+            return await self.start_boss_order(room, player)
+        elif kind == "task_boss_ack":
+            return await self.record_boss_ack(room, player, str(message.get("data", "")))
         elif kind == "party_chat":
             text = clean_text(message.get("data"), 300)
             members = next((members for members in room.parties.values()

@@ -59,7 +59,8 @@ class InteractionsMixin:
                         "shinwa_remove", "shinwa_reclaim", "vxmm_bet", "vxmm_result", "chan_le_bet",
                         "chan_le_result", "rank_report",
                         "dungeon_finish", "delivery_ack", "room_password",
-                        "world_packet", "activity_reward", "party_buff") and target is None:
+                        "world_packet", "activity_reward", "party_buff",
+                        "task_boss_order", "task_boss_ack") and target is None:
             await send_json(player.writer, {"type": "error", "code": "player_not_found"})
             return
         if target is player and kind not in ("clan_seed", "clan_item_send"):
@@ -86,7 +87,7 @@ class InteractionsMixin:
         elif kind in ('cuu_sat', 'cuu_sat_clear', 'pvp_attack', 'view_notice', 'party_buff', 'player_revive'):
             handled = await self.handle_combat_interaction(
                 room, player, target, message, base, kind)
-        elif kind in ('party_invite', 'party_accept', 'party_kick', 'party_leader', 'party_lock', 'dungeon_open', 'party_leave', 'party_chat'):
+        elif kind in ('party_invite', 'party_accept', 'party_kick', 'party_leader', 'party_lock', 'dungeon_open', 'party_leave', 'party_chat', 'task_boss_order', 'task_boss_ack'):
             handled = await self.handle_party_interaction(
                 room, player, target, message, base, kind)
         elif kind in ('trade_invite', 'trade_accept', 'trade_offer', 'trade_confirm', 'trade_ready', 'trade_cancel', 'duel_invite', 'duel_accept', 'duel_attack', 'duel_cancel'):
