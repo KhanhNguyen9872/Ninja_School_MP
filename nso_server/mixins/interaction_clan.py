@@ -83,8 +83,8 @@ class ClanInteractionMixin:
                     or int(clan.get("item_level", 0)) != 0
                     or clan.get("items")):
                 return True
-            parts = str(message.get("data", "")).split("#", 4)
-            if len(parts) != 5:
+            parts = str(message.get("data", "")).split("#", 6)
+            if len(parts) not in (5, 7):
                 await send_json(player.writer, {"type": "error", "code": "clan_seed_invalid"})
                 return False
             try:
@@ -112,6 +112,13 @@ class ClanInteractionMixin:
             clan["level"] = min(level, 160); clan["exp"] = min(exp, 2147483647)
             clan["coin"] = min(coin, 2147483647); clan["item_level"] = min(item_level, 127)
             clan["items"] = items
+            week = self.refresh_clan_weeks(clan)
+            if len(parts) == 7:
+                try:
+                    if int(parts[6]) == week:
+                        clan["members"][player.player_id]["week_points"] = max(0, min(int(parts[5]), 2147483647))
+                except (ValueError, TypeError): pass
+            self.save_state(); await self.flush_state()
             await self.broadcast_clan(room, clan)
         elif kind == "clan_alert":
             clan = self.clan_for_player(room, player.player_id)
@@ -257,6 +264,47 @@ class ClanInteractionMixin:
             # durable; the old bare-amount form added treasury without a receipt.
             await send_json(player.writer, {"type": "error", "code": "clan_amount_invalid"})
             return False
+        elif kind == "clan_week_spend":
+            fields = str(message.get("data", "")).split(",", 3)
+            try:
+                amount, tx, epoch, requested_clan = int(fields[0]), fields[1], int(fields[2]), fields[3]
+            except (TypeError, ValueError, IndexError): return False
+            if (amount != 1000 or not tx.startswith("ws-") or len(tx) > 120
+                    or any(c in tx for c in "|\n\r,") or not requested_clan):
+                return False
+            # Decisions and pending item obligations use the same persisted room
+            # state as contribution escrow. They outlive rollover/member removal;
+            # a retry must replay the original decision, not buy another seal.
+            decision = room.clan_contributions.get(tx)
+            if decision is not None and (decision.get("phase") != "clan_week_seal"
+                    or decision.get("target_id") != player.player_id
+                    or decision.get("clan_name") != requested_clan
+                    or decision.get("score") != epoch):
+                return False
+            clan = self.clan_for_player(room, player.player_id)
+            if decision is None:
+                week = self.refresh_clan_weeks(clan) if clan is not None else -1
+                member = clan.get("members", {}).get(player.player_id, {}) if clan else {}
+                accepted = (epoch == week and clan is not None
+                            and str(clan.get("name", "")) == requested_clan
+                            and int(member.get("week_points", 0)) >= amount)
+                if accepted:
+                    member["week_points"] -= amount
+                    member.setdefault("week_spends", {})[tx] = amount
+                decision = {"type": "clan_item_delivery", "phase": "clan_week_seal",
+                            "transaction": tx, "target_id": player.player_id,
+                            "clan_name": requested_clan, "score": epoch,
+                            "amount": amount, "category": int(accepted),
+                            "data": "870,1,1,0,0,-1," if accepted else "",
+                            "delivery_id": "week-seal-" + secrets.token_hex(12)}
+                room.clan_contributions[tx] = dict(decision)
+                room.pending_deliveries.setdefault(player.player_id, {})[decision["delivery_id"]] = dict(decision)
+            # Flush on replay too: an earlier storage error may have retained
+            # the decision only in memory, never authorize a grant before retry.
+            self.save_state(); await self.flush_state()
+            try: await send_json(player.writer, dict(decision))
+            except (ConnectionError, OSError): pass
+            if clan is not None: await self.broadcast_clan(room, clan)
         elif kind == "clan_points":
             clan = self.clan_for_player(room, player.player_id)
             if clan is None:
@@ -265,8 +313,11 @@ class ClanInteractionMixin:
             if kind == "clan_points" and player.player_id != room.owner_id:
                 await send_json(player.writer, {"type": "error", "code": "owner_world_only"})
                 return False
-            try: amount = max(0, min(int(str(message.get("data", "0"))), 100000000))
-            except ValueError: amount = 0
+            fields = str(message.get("data", "0")).split(",")
+            try:
+                amount = max(0, min(int(fields[0]), 100000000))
+                weekly = max(0, min(int(fields[1]), amount)) if len(fields) == 2 else 0
+            except (ValueError, IndexError): amount = weekly = 0
             if amount <= 0:
                 await send_json(player.writer, {"type": "error", "code": "clan_amount_invalid"})
                 return False
@@ -278,6 +329,9 @@ class ClanInteractionMixin:
                 clan["exp"] = min(2147483647, int(clan.get("exp", 0)) + amount)
                 member = clan.get("members", {}).get(player.player_id, {})
                 member["points"] = min(2147483647, int(member.get("points", 0)) + amount)
+                self.refresh_clan_weeks(clan)
+                member["week_points"] = min(2147483647, int(member.get("week_points", 0)) + weekly)
+            self.save_state(); await self.flush_state()
             await self.broadcast_clan(room, clan)
         elif kind == "clan_upgrade":
             clan = self.clan_for_player(room, player.player_id)

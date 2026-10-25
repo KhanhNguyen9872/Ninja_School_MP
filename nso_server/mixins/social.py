@@ -160,8 +160,19 @@ class SocialMixin:
             territory["active"] = False
         return territory
 
+    @staticmethod
+    def refresh_clan_weeks(clan: dict[str, Any], now: float | None = None) -> int:
+        week = (int(((time.time() if now is None else now) + 7 * 3600) // 86400) + 3) // 7
+        for member in clan.get("members", {}).values():
+            if int(member.get("week_epoch", -1)) != week:
+                member["week_epoch"] = week
+                member["week_points"] = 0
+                member["week_spends"] = {}
+        return week
+
     def clan_payload(self, room: Room, clan: dict[str, Any]) -> dict[str, Any]:
         self.refresh_clan_territory(clan)
+        self.refresh_clan_weeks(clan)
         rows: list[str] = []
         members = clan.get("members", {})
         for player_id, member in members.items():
@@ -169,7 +180,8 @@ class SocialMixin:
             rows.append(f'{player_id}:{safe}:{int(member.get("class_id", 0))}:'
                         f'{int(member.get("level", 1))}:{int(member.get("role", 0))}:'
                         f'{int(member.get("points", 0))}:'
-                        f'{1 if player_id in room.players else 0}')
+                        f'{1 if player_id in room.players else 0}:'
+                        f'{int(member.get("week_points", 0))}:{int(member.get("week_epoch", 0))}')
         leader_id = str(clan.get("leader_id", ""))
         leader = room.players.get(leader_id)
         deputy = next((str(member.get("name", "")) for member in members.values()

@@ -176,6 +176,8 @@ class GameplayInteractionMixin:
                     member = changed_clan.get("members", {}).get(player.player_id)
                     if member is not None:
                         member["points"] = min(2147483647, int(member.get("points", 0)) + points)
+                        self.refresh_clan_weeks(changed_clan)
+                        member["week_points"] = min(2147483647, int(member.get("week_points", 0)) + points)
                         changed_clan["exp"] = min(2147483647, int(changed_clan.get("exp", 0)) + points)
             removed = self.acknowledge_delivery(room, player.player_id, delivery_id)
             if not removed and not separator:
