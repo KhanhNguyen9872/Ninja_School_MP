@@ -267,6 +267,13 @@ class PersistenceMixin:
                           cooldown=combat_number("cooldown", maximum=3600000),
                           bind_ms=combat_number("bind_ms", maximum=600000),
                           free_mana=combat_number("free_mana", maximum=1), _at=int(time.monotonic() * 1000))
+            equipment = message.get("equipment_ids")
+            # Effect weapons deliberately have sprite -1; unarmed hands can
+            # render sprite 15. Combat follows the actual equipment slot.
+            combat["armed"] = int(self.clean_int_list(equipment, 16, -1, 32767)[1] >= 0) \
+                if isinstance(equipment, list) and len(equipment) > 1 \
+                else int(number("weapon", -1, -1, 32767) >= 0)
+            combat["equipment_known"] = int(isinstance(equipment, list) and len(equipment) > 1)
         return {"name": clean_text(message.get("name"), MAX_NAME),
                 "class_id": number("class_id", 0, 0, 6),
                 "gender": number("gender", 0, 0, 1),
@@ -305,7 +312,12 @@ class PersistenceMixin:
                 "fashion_ids": self.clean_int_list(message.get("fashion_ids"), 16, -1, 32767),
                 "fashion_upgrades": self.clean_int_list(message.get("fashion_upgrades"), 16, -1, 127),
                 "fashion_systems": self.clean_int_list(message.get("fashion_systems"), 16, -1, 127),
-                "clan_name": clean_text(message.get("clan_name"), MAX_NAME)}
+                "clan_name": clean_text(message.get("clan_name"), MAX_NAME),
+                "clan_role": number("clan_role", 0, 0, 4),
+                "title_effect": number("title_effect", -1, -1, 32767),
+                "title_effect_lifetime": number("title_effect_lifetime", 10000, 100, 600000),
+                "gear_aura_effect": number("gear_aura_effect", -1, -1, 32767),
+                "costume_aura_effect": number("costume_aura_effect", -1, -1, 32767)}
 
     def clean_clone(self, message: dict[str, Any], player: Player) -> dict[str, Any]:
         active = bool(message.get("active", False))

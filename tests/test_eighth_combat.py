@@ -65,12 +65,17 @@ class EighthCombatDomainTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.s.validate_pvp_attack(self.a,self.b,1),-1)
         self.assertEqual(self.a.appearance['mp'],0)
 
+    async def test_effect_weapon_uses_equipment_identity_not_sprite(self):
+        self.a.appearance['weapon'] = -1
+        with patch('nso_server.mixins.combat.secrets.randbelow', return_value=0):
+            self.assertGreaterEqual(await self.s.validate_pvp_attack(self.a, self.b, 1), 0)
+
     async def test_missing_profile_stun_weapon_and_map_zone_fail_closed(self):
         for mode in ('missing','stunned','weapon','village','zone','dead'):
             a=copy.deepcopy(self.a);b=copy.deepcopy(self.b)
             if mode=='missing':a.appearance.pop('combat')
             elif mode=='stunned':a.appearance['combat']['locked_ms']=60000
-            elif mode=='weapon':a.appearance['weapon']=-1
+            elif mode=='weapon':a.appearance['equipment_ids'][1]=-1
             elif mode=='village':a.map_id=b.map_id=22
             elif mode=='zone':b.zone_id=1
             elif mode=='dead':a.hp=0

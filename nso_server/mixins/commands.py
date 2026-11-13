@@ -240,6 +240,9 @@ class CommandsMixin:
             if clan is not None:
                 player.clan_name = str(clan.get("name", player.clan_name))
                 appearance["clan_name"] = player.clan_name
+                appearance["clan_role"] = self.clan_actor_role(clan, player.player_id)
+            else:
+                appearance["clan_role"] = 0
                 if player.clan_name != requested_clan_name:
                     await send_json(player.writer, {"type": "clan_name_assigned",
                                                     "seq": room.sequence,

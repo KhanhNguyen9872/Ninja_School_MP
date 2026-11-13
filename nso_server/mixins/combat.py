@@ -138,7 +138,12 @@ class CombatMixin:
             return await reject("combat_profile_missing")
         if skill == 24 and int(combat.get("bind_ms", 0)) <= 0:
             return await reject("combat_profile_missing")
-        if int(player.appearance.get("weapon", -1)) < 0 \
+        equipment = player.appearance.get("equipment_ids", [])
+        armed = (int(equipment[1] >= 0)
+                 if combat.get("equipment_known", 0) and isinstance(equipment, list)
+                 and len(equipment) > 1
+                 else int(player.appearance.get("weapon", -1) >= 0))
+        if not armed \
                 or self.combat_effect(player, "locked_ms"):
             return await reject("combatant_locked")
         if not duel and player.map_id in (1,10,17,22,27,32,38,43,48,72,98,133,162,177):
