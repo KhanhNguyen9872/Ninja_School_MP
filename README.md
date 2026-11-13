@@ -68,6 +68,9 @@ docker compose up -d --build
 
 ## Kiểm thử
 
+Sửa tỷ thí/đổi map, khu và tên gia tộc (13/11/2026): xem
+[changelog](docs/CHANGELOG_20261113_VI.md). Cập nhật server cùng client `.77`.
+
 ```bash
 python -m unittest discover -s tests -p "test_*.py" -v
 ```

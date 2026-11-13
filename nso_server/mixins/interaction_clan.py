@@ -44,6 +44,7 @@ class ClanInteractionMixin:
                 await send_json(player.writer, {"type": "error", "code": "clan_member_busy"})
                 return False
             player.clan_name = str(clan.get("name", ""))
+            player.appearance["clan_name"] = player.clan_name
             clan.setdefault("members", {})[player.player_id] = {
                 "name": player.name, "class_id": int(player.appearance.get("class_id", 0)),
                 "level": int(player.appearance.get("level", 1)), "role": 0, "points": 0}
@@ -171,7 +172,8 @@ class ClanInteractionMixin:
             clan["coin"] = int(clan.get("coin", 0)) - fee
             clan["members"].pop(target.player_id, None)
             target.clan_name = ""
-            await send_json(target.writer, {"type": "clan_joined", "seq": room.sequence,
+            target.appearance["clan_name"] = ""
+            await self.broadcast(room, {"type": "clan_joined", "seq": room.sequence,
                                             "joined_id": target.player_id,
                                             "joined_actor_id": target.actor_id,
                                             "name": target.name, "clan_name": "",
@@ -187,7 +189,8 @@ class ClanInteractionMixin:
                 return False
             clan.get("members", {}).pop(player.player_id, None)
             player.clan_name = ""
-            await send_json(player.writer, {"type": "clan_joined", "seq": room.sequence,
+            player.appearance["clan_name"] = ""
+            await self.broadcast(room, {"type": "clan_joined", "seq": room.sequence,
                                             "joined_id": player.player_id,
                                             "joined_actor_id": player.actor_id,
                                             "name": player.name, "clan_name": "",

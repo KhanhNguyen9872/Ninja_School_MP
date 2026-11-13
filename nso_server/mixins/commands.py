@@ -262,6 +262,7 @@ class CommandsMixin:
             next_map = int(message.get("map", player.map_id))
             next_zone = max(0, int(message.get("zone", player.zone_id)))
             if next_map != player.map_id or next_zone != player.zone_id:
+                await self.finish_duel(room, player)
                 await self.clear_cuu_sat_for_player(room, player,
                                                     "map_transition", True)
             player.map_id = next_map
@@ -518,6 +519,7 @@ class CommandsMixin:
             next_map = int(message.get("map", player.map_id))
             next_zone = max(0, int(message.get("zone", player.zone_id)))
             if next_map != player.map_id or next_zone != player.zone_id:
+                await self.finish_duel(room, player)
                 await self.clear_cuu_sat_for_player(room, player,
                                                     "map_transition", True)
             next_x = int(message.get("x", player.x))

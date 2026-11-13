@@ -10,6 +10,28 @@ from ..models import Player, Room
 from ..protocol import send_json
 
 class TradeInteractionMixin:
+    async def finish_duel(self, room: Room, loser: Player,
+                          restore_hp: bool = False) -> bool:
+        """Remove both links before notifying either participant, exactly once."""
+        peer_id = room.duels.pop(loser.player_id, "")
+        if not peer_id:
+            return False
+        if room.duels.get(peer_id) == loser.player_id:
+            room.duels.pop(peer_id, None)
+        peer = room.players.get(peer_id)
+        if peer is not None:
+            room.sequence += 1
+            if restore_hp:
+                for participant in (loser, peer):
+                    participant.hp = max(1, int(participant.appearance.get("max_hp", 1)))
+            await self.send_pair(loser, peer,
+                                 {"type": "duel_end", "seq": room.sequence,
+                                  "loser_id": loser.player_id,
+                                  "loser_actor_id": loser.actor_id,
+                                  "winner_id": peer.player_id,
+                                  "winner_actor_id": peer.actor_id})
+        return True
+
     async def handle_trade_interaction(
             self, room: Room, player: Player, target: Player | None,
             message: dict[str, Any], base: dict[str, Any], kind: str) -> bool:
@@ -127,10 +149,16 @@ class TradeInteractionMixin:
                     try: await send_json(member.writer, event)
                     except (ConnectionError, OSError): pass
         elif kind == "duel_invite":
+            if player.player_id in room.duels or target.player_id in room.duels:
+                await send_json(player.writer, {"type": "error", "code": "duel_busy"})
+                return False
             room.pending_invites[f"duel:{player.player_id}:{target.player_id}"] = (
                 time.monotonic() + INVITE_TTL_SECONDS)
             await send_json(target.writer, dict(base, type="duel_invite"))
         elif kind == "duel_accept":
+            if player.player_id in room.duels or target.player_id in room.duels:
+                await send_json(player.writer, {"type": "error", "code": "duel_busy"})
+                return False
             invite_key = f"duel:{target.player_id}:{player.player_id}"
             expires = room.pending_invites.pop(invite_key, 0.0)
             if expires <= time.monotonic():
@@ -162,25 +190,7 @@ class TradeInteractionMixin:
                                       "damage": -damage if player.last_pvp_fatal else damage,
                                       "hp": target.hp}, player.zone_id)
             if target.hp == 0:
-                await self.send_pair(player, target,
-                                     {"type": "duel_end", "seq": room.sequence,
-                                      "loser_id": target.player_id,
-                                      "loser_actor_id": target.actor_id,
-                                      "winner_id": player.player_id,
-                                      "winner_actor_id": player.actor_id})
-                room.duels.pop(player.player_id, None)
-                room.duels.pop(target.player_id, None)
-                for participant in (player, target):
-                    participant.hp = max(1, int(participant.appearance.get("max_hp", 1)))
+                await self.finish_duel(room, target, restore_hp=True)
         elif kind == "duel_cancel":
-            peer_id = room.duels.pop(player.player_id, "")
-            peer = room.players.get(peer_id)
-            if peer is not None:
-                room.duels.pop(peer_id, None)
-                await self.send_pair(player, peer,
-                                     {"type": "duel_end", "seq": room.sequence,
-                                      "loser_id": player.player_id,
-                                      "loser_actor_id": player.actor_id,
-                                      "winner_id": peer.player_id,
-                                      "winner_actor_id": peer.actor_id})
+            await self.finish_duel(room, player)
         return True
