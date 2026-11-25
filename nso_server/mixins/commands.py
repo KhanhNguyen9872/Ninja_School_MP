@@ -65,7 +65,16 @@ class CommandsMixin:
     async def command(self, player: Player, message: dict[str, Any]) -> None:
         try:
             await self._command(player, message)
-        except (ValueError, TypeError, KeyError):
+        except (ConnectionError, OSError):
+            raise
+        except (ValueError, TypeError, KeyError, AttributeError, IndexError,
+                OverflowError, ArithmeticError) as error:
+            # A malformed field must cost the sender one request, not its
+            # connection: losing the owner's socket suspends the whole room.
+            if not isinstance(error, (ValueError, TypeError, KeyError)):
+                self.log("warning", reason="command_failed",
+                         command=clean_text(message.get("cmd"), 24),
+                         player_id=player.player_id, error=type(error).__name__)
             try:
                 await send_json(player.writer, {"type": "error", "code": "bad_request"})
             except (ConnectionError, OSError):
@@ -243,10 +252,10 @@ class CommandsMixin:
                 appearance["clan_role"] = self.clan_actor_role(clan, player.player_id)
             else:
                 appearance["clan_role"] = 0
-                if player.clan_name != requested_clan_name:
-                    await send_json(player.writer, {"type": "clan_name_assigned",
-                                                    "seq": room.sequence,
-                                                    "clan_name": player.clan_name})
+            if player.clan_name != requested_clan_name:
+                await send_json(player.writer, {"type": "clan_name_assigned",
+                                                "seq": room.sequence,
+                                                "clan_name": player.clan_name})
             room.sequence += 1
             await self.broadcast(room, {"type": "player_appearance", "seq": room.sequence,
                                          "player_id": player.player_id,

@@ -101,9 +101,16 @@ def _encode_value(value: Any) -> bytes:
         return b"\x06" + struct.pack(">H", len(value)) + b"".join(_encode_value(v) for v in value)
     return b"\x04" + _pack_string(str(value))
 
-def _decode_value(data: bytes, offset: int = 0) -> tuple[Any, int]:
+MAX_DECODE_DEPTH = 16
+
+
+def _decode_value(data: bytes, offset: int = 0, depth: int = 0) -> tuple[Any, int]:
     if offset >= len(data):
         raise ValueError("truncated value")
+    # Three bytes open one more list level, so an unchecked 256 KiB frame
+    # could recurse far past the interpreter limit.
+    if depth > MAX_DECODE_DEPTH:
+        raise ValueError("value nested too deeply")
     tag = data[offset]; offset += 1
     if tag == 0: return None, offset
     if tag == 1: return False, offset
@@ -138,14 +145,14 @@ def _decode_value(data: bytes, offset: int = 0) -> tuple[Any, int]:
                 if key is None: raise ValueError("unknown key")
             else:
                 key, offset = _decode_raw_string(data, offset)
-            result[key], offset = _decode_value(data, offset)
+            result[key], offset = _decode_value(data, offset, depth + 1)
         return result, offset
     if tag == 6:
         if offset + 2 > len(data): raise ValueError("truncated list")
         count = struct.unpack_from(">H", data, offset)[0]; offset += 2
         result = []
         for _ in range(count):
-            item, offset = _decode_value(data, offset); result.append(item)
+            item, offset = _decode_value(data, offset, depth + 1); result.append(item)
         return result, offset
     raise ValueError("unknown value tag")
 

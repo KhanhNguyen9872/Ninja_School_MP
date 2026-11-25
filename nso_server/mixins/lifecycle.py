@@ -56,9 +56,9 @@ class LifecycleMixin:
             self.unindex_room_player(room, player)
             room.players.pop(player.player_id, None)
             await self.broadcast(room, {"type": "player_leave", "player_id": player.player_id})
+            player.room_id = None
+            self.discard_empty_room(room)
             self.save_state()
-            if not room.players:
-                self.rooms.pop(room.room_id, None)
         try:
             player.writer.close()
             await player.writer.wait_closed()
@@ -103,6 +103,34 @@ class LifecycleMixin:
                     await send_json(room.players[member].writer,
                                     {"type": "trade_cancel", "seq": room.sequence})
             room.trades.pop(key, None)
+        # Cừu sát is a two-player state. Without this the survivor keeps a
+        # departed target (and its PK admission) until it changes map itself.
+        cuu_sat_peer = room.cuu_sat.pop(player_id, "")
+        if not cuu_sat_peer:
+            cuu_sat_peer = next((left for left, right in room.cuu_sat.items()
+                                 if right == player_id), "")
+        if cuu_sat_peer:
+            room.cuu_sat.pop(cuu_sat_peer, None)
+            peer_player = room.players.get(cuu_sat_peer)
+            if peer_player is not None:
+                room.sequence += 1
+                try:
+                    await send_json(peer_player.writer, {
+                        "type": "cuu_sat_end", "seq": room.sequence,
+                        "first_id": player_id, "first_actor_id": actor_id or 0,
+                        "second_id": peer_player.player_id,
+                        "second_actor_id": peer_player.actor_id,
+                        "reason": "disconnect"})
+                except (ConnectionError, OSError):
+                    pass
+        # An invitation from or to a departed member can never be answered.
+        for invites in (room.party_invites, room.clan_invites, room.friend_requests):
+            for key, value in list(invites.items()):
+                if key == player_id or value == player_id:
+                    invites.pop(key, None)
+        for key in list(room.pending_invites):
+            if player_id in key.split(":")[1:]:
+                room.pending_invites.pop(key, None)
         duel_peer = room.duels.pop(player_id, "")
         if duel_peer:
             room.duels.pop(duel_peer, None)
@@ -263,18 +291,31 @@ class LifecycleMixin:
             player.room_id = None
             return
         await self.clear_cuu_sat_for_player(room, player, "disconnect", True)
+        await self.purge_member_state(room, player.player_id, player.actor_id)
         self.unindex_room_player(room, player)
         room.players.pop(player.player_id, None)
         player.room_id = None
         await self.broadcast(room, {"type": "player_leave", "player_id": player.player_id})
         self.log("room_left", room=room.room_id, player_id=player.player_id,
                  players=len(room.players))
-        if not room.players:
-            self.rooms.pop(room.room_id, None)
-            self.forget_saved_room(room.room_id)
-        elif room.owner_id not in room.players and room.owner_grace_until <= time.monotonic():
+        if not self.discard_empty_room(room) and room.players \
+                and room.owner_id not in room.players \
+                and room.owner_grace_until <= time.monotonic():
             await self.promote_or_close_room(room)
         self.save_state()
+
+    def discard_empty_room(self, room: Room) -> bool:
+        """Drop a room nobody can return to, together with its saved rows.
+
+        While the owner's reconnect grace is running the empty room is kept:
+        the grace timer closes it, and until then the owner can still resume.
+        """
+        if room.players or room.owner_grace_until > time.monotonic():
+            return False
+        if self.rooms.get(room.room_id) is room:
+            self.rooms.pop(room.room_id, None)
+            self.forget_saved_room(room.room_id)
+        return True
 
     async def owner_leave(self, player: Player) -> None:
         room = self.rooms.get(player.room_id or "")
@@ -376,6 +417,13 @@ class LifecycleMixin:
 
     def lock_password_failure(self, ip: str, room_id: str) -> bool:
         key = (ip or "", room_id)
+        if len(self.password_failures) >= 4096:
+            # Keep active locks; forget counters and expired locks so a scan
+            # over many room ids cannot grow this table without bound.
+            now = time.monotonic()
+            self.password_failures = {
+                row_key: row for row_key, row in self.password_failures.items()
+                if row[1] > now}
         count, until = self.password_failures.get(key, (0, 0.0))
         if until > time.monotonic():
             return True
